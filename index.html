@@ -384,50 +384,174 @@ function renderCart(){
 }
 function removeCart(n){cart.splice(n,1);localStorage.setItem('anandaCart',JSON.stringify(cart));renderCart()}
 async function placeOrder(){
-  const name=document.getElementById('custName').value.trim(),
-        phone=document.getElementById('custPhone').value.trim(),
-        email=document.getElementById('custEmail').value.trim(),
-        address=document.getElementById('custAddress').value.trim(),
-        city=document.getElementById('custCity').value.trim(),
-        btn=document.getElementById('payBtn'),
-        status=document.getElementById('paymentStatus');
+  const name=document.getElementById('custName').value.trim();
+  const phone=document.getElementById('custPhone').value.trim();
+  const email=document.getElementById('custEmail').value.trim();
+  const address=document.getElementById('custAddress').value.trim();
+  const city=document.getElementById('custCity').value.trim();
+  const btn=document.getElementById('payBtn');
+  const status=document.getElementById('paymentStatus');
 
-  if(!name||!phone||!address||!city){ alert('Please complete your delivery details.'); return; }
+  if(!name||!phone||!address||!city){
+    alert('Please complete your delivery details.');
+    return;
+  }
+
   const orderItems=cart.map(id=>products.find(p=>p[6]===id)).filter(Boolean);
-  if(!orderItems.length){ alert('Your cart is empty.'); show('cart'); return; }
-  const total=orderItems.reduce((sum,p)=>sum+(parseFloat(String(p[1]).replace(/[^0-9.]/g,''))||0),0);
-  const items=orderItems.map(p=>({name:p[0],price:p[1],id:p[6]}));
 
-  btn.disabled=true; btn.textContent='SENDING M-PESA PROMPT…';
-  status.style.display='block'; status.innerHTML='<b>Connecting to M-PESA…</b><div>Please keep your phone nearby.</div>';
+  if(!orderItems.length){
+    alert('Your cart is empty.');
+    show('cart');
+    return;
+  }
+
+  const total=Math.round(orderItems.reduce((sum,p)=>{
+    return sum+(parseFloat(String(p[1]).replace(/[^0-9.]/g,''))||0);
+  },0));
+
+  const items=orderItems.map(p=>({
+    id:p[6],
+    name:p[0],
+    price:p[1]
+  }));
+
+  const orderId='ANANDA-'+Date.now();
+
+  btn.disabled=true;
+  btn.textContent='SENDING M-PESA PROMPT…';
+  status.style.display='block';
+  status.innerHTML='<b>Connecting to M-PESA…</b><div>Please keep your phone nearby.</div>';
+
   try{
-    const r=await fetch('/api/mpesa/stkpush',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,email,address,city,items,amount:total})});
-    const data=await r.json();
-    if(!r.ok) throw new Error(data.error||'M-PESA request failed.');
-    status.innerHTML='<b>CHECK YOUR PHONE</b><div>'+escapeHtml(data.customerMessage||'Enter your M-PESA PIN to complete payment.')+'</div><div style="margin-top:8px">Waiting for payment confirmation…</div>';
+    const r=await fetch('/api/mpesa/stkpush',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        name,
+        phone,
+        email,
+        address,
+        city,
+        items,
+        amount:total,
+        orderId,
+        accountReference:orderId,
+        transactionDesc:'ANANDA Herbal Products'
+      })
+    });
+
+    const data=await r.json().catch(()=>({}));
+
+    if(!r.ok || data.success===false){
+      throw new Error(data.message||data.error||'M-PESA request failed.');
+    }
+
+    const checkoutRequestId=
+      data.checkoutRequestId||
+      data.CheckoutRequestID||
+      data.data?.CheckoutRequestID;
+
+    if(!checkoutRequestId){
+      throw new Error('M-PESA did not return a CheckoutRequestID.');
+    }
+
+    status.innerHTML='<b>CHECK YOUR PHONE</b><div>'+
+      escapeHtml(data.customerMessage||data.message||'Enter your M-PESA PIN to complete payment.')+
+      '</div><div style="margin-top:8px">Waiting for payment confirmation…</div>';
+
     btn.textContent='WAITING FOR PAYMENT…';
-    await pollPayment(data.orderId);
+
+    await pollPayment(checkoutRequestId);
+
   }catch(e){
-    status.innerHTML='<b>Payment could not be started</b><div>'+escapeHtml(e.message)+'</div>';
-    btn.disabled=false; btn.textContent='TRY M-PESA AGAIN';
+    console.error('Payment error:',e);
+    status.innerHTML='<b>Payment could not be completed</b><div>'+escapeHtml(e.message)+'</div>';
+    btn.disabled=false;
+    btn.textContent='TRY M-PESA AGAIN';
   }
 }
-function escapeHtml(v){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-async function pollPayment(orderId){
+
+function escapeHtml(v){
+  return String(v).replace(/[&<>'"]/g,c=>({
+    '&':'&amp;',
+    '<':'&lt;',
+    '>':'&gt;',
+    "'":'&#39;',
+    '"':'&quot;'
+  }[c]));
+}
+
+async function pollPayment(checkoutRequestId){
   const status=document.getElementById('paymentStatus');
   const btn=document.getElementById('payBtn');
-  for(let i=0;i<30;i++){
-    await new Promise(r=>setTimeout(r,3000));
-    const r=await fetch('/api/orders/'+encodeURIComponent(orderId));
-    const data=await r.json();
-    if(data.status==='paid'){
-      status.innerHTML='<b>✓ PAYMENT CONFIRMED</b><div>M-PESA receipt: '+escapeHtml(data.receipt||'Confirmed')+'</div><div>Your ANANDA order has been received.</div>';
-      localStorage.removeItem('anandaCart'); cart=[]; btn.textContent='ORDER PAID';
-      setTimeout(()=>show('home'),1800); return;
+
+  for(let i=0;i<40;i++){
+    await new Promise(resolve=>setTimeout(resolve,3000));
+
+    try{
+      const r=await fetch('/api/mpesa/payment/'+encodeURIComponent(checkoutRequestId),{
+        cache:'no-store'
+      });
+
+      const data=await r.json().catch(()=>({}));
+
+      if(!r.ok){
+        console.warn('Payment status request failed:',data);
+        continue;
+      }
+
+      console.log('Payment status:',data);
+
+      const currentStatus=String(data.status||'').toUpperCase();
+
+      if(currentStatus==='PAID'){
+        const receipt=
+          data.payment?.mpesaReceipt||
+          data.mpesaReceipt||
+          data.receipt||
+          'Confirmed';
+
+        status.innerHTML='<div style="text-align:center">'+
+          '<div style="font-size:42px;margin-bottom:8px">✓</div>'+
+          '<b>PAYMENT CONFIRMED</b>'+ 
+          '<div style="margin-top:8px">M-PESA Receipt: <b>'+escapeHtml(receipt)+'</b></div>'+ 
+          '<div style="margin-top:8px">Your ANANDA order has been received.</div>'+ 
+          '</div>';
+
+        localStorage.removeItem('anandaCart');
+        cart=[];
+        renderCart();
+
+        btn.disabled=true;
+        btn.textContent='ORDER PAID ✓';
+
+        setTimeout(()=>show('home'),2500);
+        return;
+      }
+
+      if(currentStatus==='FAILED'){
+        const message=
+          data.payment?.resultDesc||
+          data.resultDesc||
+          data.message||
+          'M-PESA payment was not completed.';
+
+        status.innerHTML='<b>PAYMENT NOT COMPLETED</b><div>'+escapeHtml(message)+'</div>';
+        btn.disabled=false;
+        btn.textContent='TRY M-PESA AGAIN';
+        return;
+      }
+
+      status.innerHTML='<b>WAITING FOR PAYMENT…</b><div>Please complete the M-PESA prompt on your phone.</div>';
+
+    }catch(error){
+      console.error('Payment polling error:',error);
     }
-    if(data.status==='failed') throw new Error(data.message||'M-PESA payment was not completed.');
   }
-  throw new Error('Payment is still pending. If you completed the M-PESA prompt, please contact ANANDA and provide your order reference: '+orderId);
+
+  status.innerHTML='<b>PAYMENT STILL PENDING</b><div>We have not yet received final confirmation from M-PESA.</div><div style="margin-top:8px">Checkout Request: '+escapeHtml(checkoutRequestId)+'</div>';
+  btn.disabled=false;
+  btn.textContent='CHECK PAYMENT AGAIN';
 }
 function bookConsult(){
   const n=document.getElementById('conName').value.trim(),
