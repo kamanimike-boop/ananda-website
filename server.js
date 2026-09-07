@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Website files are in the ROOT of the GitHub repository
+// Website files are in the ROOT of the repository
 app.use(express.static(__dirname));
 
 const PORT = process.env.PORT || 3000;
@@ -25,9 +25,7 @@ if (!fs.existsSync(ORDERS_FILE)) {
 
 function readOrders() {
   try {
-    return JSON.parse(
-      fs.readFileSync(ORDERS_FILE, 'utf8')
-    );
+    return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8'));
   } catch {
     return [];
   }
@@ -177,19 +175,15 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
       BusinessShortCode: shortcode,
       Password: password,
       Timestamp: timestamp,
-
       TransactionType:
         process.env.MPESA_TRANSACTION_TYPE ||
         'CustomerPayBillOnline',
-
       Amount: total,
       PartyA: msisdn,
       PartyB: shortcode,
       PhoneNumber: msisdn,
-
       CallBackURL:
         `${callbackBase}/api/mpesa/callback`,
-
       AccountReference: orderId.slice(0, 12),
       TransactionDesc: 'ANANDA order'
     };
@@ -198,12 +192,10 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
       `${base}/mpesa/stkpush/v1/processrequest`,
       {
         method: 'POST',
-
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-
         body: JSON.stringify(payload)
       }
     );
@@ -211,10 +203,7 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
     const data = await r.json();
 
     if (!r.ok || data.ResponseCode !== '0') {
-      console.error(
-        'M-PESA STK error',
-        data
-      );
+      console.error('M-PESA STK error', data);
 
       return res.status(502).json({
         error:
@@ -233,30 +222,18 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
       email: email || '',
       address,
       city,
-
-      items:
-        Array.isArray(items)
-          ? items
-          : [],
-
+      items: Array.isArray(items) ? items : [],
       amount: total,
       status: 'pending',
-
-      merchantRequestId:
-        data.MerchantRequestID,
-
-      checkoutRequestId:
-        data.CheckoutRequestID,
-
-      createdAt:
-        new Date().toISOString()
+      merchantRequestId: data.MerchantRequestID,
+      checkoutRequestId: data.CheckoutRequestID,
+      createdAt: new Date().toISOString()
     });
 
     writeOrders(orders);
 
     res.json({
       orderId,
-
       customerMessage:
         data.CustomerMessage ||
         'Check your phone and enter your M-PESA PIN to complete payment.'
@@ -287,12 +264,11 @@ app.post('/api/mpesa/callback', (req, res) => {
 
     const orders = readOrders();
 
-    const idx =
-      orders.findIndex(
-        o =>
-          o.checkoutRequestId ===
-          callback.CheckoutRequestID
-      );
+    const idx = orders.findIndex(
+      o =>
+        o.checkoutRequestId ===
+        callback.CheckoutRequestID
+    );
 
     if (idx >= 0) {
       const order = orders[idx];
@@ -302,25 +278,15 @@ app.post('/api/mpesa/callback', (req, res) => {
           ? 'paid'
           : 'failed';
 
-      order.resultCode =
-        callback.ResultCode;
+      order.resultCode = callback.ResultCode;
+      order.resultDesc = callback.ResultDesc;
 
-      order.resultDesc =
-        callback.ResultDesc;
-
-      if (
-        Number(callback.ResultCode) === 0
-      ) {
-        const md =
-          Object.fromEntries(
-            (
-              callback
-                .CallbackMetadata
-                ?.Item || []
-            ).map(
-              x => [x.Name, x.Value]
-            )
-          );
+      if (Number(callback.ResultCode) === 0) {
+        const md = Object.fromEntries(
+          (callback.CallbackMetadata?.Item || []).map(
+            x => [x.Name, x.Value]
+          )
+        );
 
         order.mpesaReceipt =
           md.MpesaReceiptNumber || '';
@@ -344,10 +310,7 @@ app.post('/api/mpesa/callback', (req, res) => {
     });
 
   } catch (e) {
-    console.error(
-      'Callback error',
-      e
-    );
+    console.error('Callback error', e);
 
     res.json({
       ResultCode: 0,
@@ -359,9 +322,7 @@ app.post('/api/mpesa/callback', (req, res) => {
 app.get('/api/orders/:id', (req, res) => {
   const order =
     readOrders().find(
-      o =>
-        o.orderId ===
-        req.params.id
+      o => o.orderId === req.params.id
     );
 
   if (!order) {
@@ -372,27 +333,16 @@ app.get('/api/orders/:id', (req, res) => {
 
   res.json({
     orderId: order.orderId,
-
-    status:
-      order.status,
-
-    receipt:
-      order.mpesaReceipt ||
-      null,
-
-    message:
-      order.resultDesc ||
-      null
+    status: order.status,
+    receipt: order.mpesaReceipt || null,
+    message: order.resultDesc || null
   });
 });
 
-// Serve index.html from the ROOT of the repository
+// Serve index.html from the ROOT
 app.get('/{*splat}', (req, res) => {
   res.sendFile(
-    path.join(
-      __dirname,
-      'index.html'
-    )
+    path.join(__dirname, 'index.html')
   );
 });
 
