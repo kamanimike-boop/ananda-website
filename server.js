@@ -1,354 +1,266 @@
-```javascript
-const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
+const express = require("express");
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 
 const app = express();
 
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Website files are in the ROOT of the repository
+// Serve website files from the repository root
 app.use(express.static(__dirname));
+
+// -----------------------------
+// Configuration
+// -----------------------------
 
 const PORT = process.env.PORT || 3000;
 
-const DATA_DIR = path.join(__dirname, 'data');
-const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
+const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
+const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE;
+const MPESA_PASSKEY = process.env.MPESA_PASSKEY;
+const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL;
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+const ORDERS_FILE = path.join(__dirname, "data", "orders.json");
 
-if (!fs.existsSync(ORDERS_FILE)) {
-  fs.writeFileSync(ORDERS_FILE, '[]');
+// Make sure data folder exists
+if (!fs.existsSync(path.dirname(ORDERS_FILE))) {
+  fs.mkdirSync(path.dirname(ORDERS_FILE), { recursive: true });
 }
 
-function readOrders() {
+// Make sure orders file exists
+if (!fs.existsSync(ORDERS_FILE)) {
+  fs.writeFileSync(ORDERS_FILE, "[]");
+}
+
+// -----------------------------
+// Helper functions
+// -----------------------------
+
+function loadOrders() {
   try {
-    return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8'));
-  } catch {
+    return JSON.parse(fs.readFileSync(ORDERS_FILE, "utf8"));
+  } catch (error) {
     return [];
   }
 }
 
-function writeOrders(orders) {
-  fs.writeFileSync(
-    ORDERS_FILE,
-    JSON.stringify(orders, null, 2)
+function saveOrders(orders) {
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+}
+
+function getTimestamp() {
+  const now = new Date();
+
+  const parts = {
+    year: now.getFullYear(),
+    month: String(now.getMonth() + 1).padStart(2, "0"),
+    day: String(now.getDate()).padStart(2, "0"),
+    hour: String(now.getHours()).padStart(2, "0"),
+    minute: String(now.getMinutes()).padStart(2, "0"),
+    second: String(now.getSeconds()).padStart(2, "0")
+  };
+
+  return (
+    String(parts.year) +
+    String(parts.month) +
+    String(parts.day) +
+    String(parts.hour) +
+    String(parts.minute) +
+    String(parts.second)
   );
 }
 
-function nowStamp() {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Africa/Nairobi',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23'
-  })
-    .formatToParts(new Date())
-    .reduce((a, p) => {
-      a[p.type] = p.value;
-      return a;
-    }, {});
-
-  return `${parts.year}${parts.month}${parts.day}${parts.hour}${parts.minute}${parts.second}`;
-}
-
-function normalizePhone(phone) {
-  let p = String(phone || '').replace(/\D/g, '');
-
-  if (p.startsWith('0')) {
-    p = '254' + p.slice(1);
+function requiredEnv(name, value) {
+  if (!value) {
+    throw new Error("Missing environment variable: " + name);
   }
 
-  if (p.startsWith('7')) {
-    p = '254' + p;
-  }
-
-  return p;
+  return value;
 }
 
-function env(name) {
-  const v = process.env[name];
+// -----------------------------
+// M-PESA access token
+// -----------------------------
 
-  if (!v) {
-    throw new Error(`Missing environment variable: ${name}`);
-  }
+async function getMpesaToken() {
+  const key = requiredEnv("MPESA_CONSUMER_KEY", MPESA_CONSUMER_KEY);
+  const secret = requiredEnv(
+    "MPESA_CONSUMER_SECRET",
+    MPESA_CONSUMER_SECRET
+  );
 
-  return v;
-}
+  const auth = Buffer.from(key + ":" + secret).toString("base64");
 
-async function mpesaToken() {
-  const key = env('MPESA_CONSUMER_KEY');
-  const secret = env('MPESA_CONSUMER_SECRET');
-
-  const base =
-    process.env.MPESA_ENVIRONMENT === 'production'
-      ? 'https://api.safaricom.co.ke'
-      : 'https://sandbox.safaricom.co.ke';
-
-  const auth = Buffer.from(
-    `${key}:${secret}`
-  ).toString('base64');
-
-  const r = await fetch(
-    `${base}/oauth/v1/generate?grant_type=client_credentials`,
+  const response = await axios.get(
+    "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
     {
       headers: {
-        Authorization: `Basic ${auth}`
+        Authorization: "Basic " + auth
       }
     }
   );
 
-  const data = await r.json();
-
-  if (!r.ok || !data.access_token) {
-    throw new Error(
-      data.errorMessage ||
-      'Could not get M-PESA access token'
-    );
-  }
-
-  return {
-    token: data.access_token,
-    base
-  };
+  return response.data.access_token;
 }
 
-app.post('/api/mpesa/stkpush', async (req, res) => {
+// -----------------------------
+// STK Push
+// -----------------------------
+
+app.post("/api/mpesa/stkpush", async (req, res) => {
   try {
     const {
-      name,
       phone,
-      email,
-      address,
-      city,
-      items,
-      amount
-    } = req.body || {};
+      amount,
+      orderId,
+      accountReference,
+      transactionDesc
+    } = req.body;
 
-    const msisdn = normalizePhone(phone);
-    const total = Math.round(Number(amount));
+    const token = await getMpesaToken();
 
-    if (
-      !name ||
-      !address ||
-      !city ||
-      !/^2547\d{8}$/.test(msisdn)
-    ) {
-      return res.status(400).json({
-        error:
-          'Please provide a valid Kenyan Safaricom number and complete delivery details.'
-      });
-    }
+    const shortcode = requiredEnv("MPESA_SHORTCODE", MPESA_SHORTCODE);
+    const passkey = requiredEnv("MPESA_PASSKEY", MPESA_PASSKEY);
+    const callbackUrl = requiredEnv(
+      "MPESA_CALLBACK_URL",
+      MPESA_CALLBACK_URL
+    );
 
-    if (!Number.isFinite(total) || total < 1) {
-      return res.status(400).json({
-        error: 'Invalid order amount.'
-      });
-    }
-
-    const { token, base } = await mpesaToken();
-
-    const timestamp = nowStamp();
-    const shortcode = env('MPESA_SHORTCODE');
-    const passkey = env('MPESA_PASSKEY');
+    const timestamp = getTimestamp();
 
     const password = Buffer.from(
-      `${shortcode}${passkey}${timestamp}`
-    ).toString('base64');
+      shortcode + passkey + timestamp
+    ).toString("base64");
 
-    const callbackBase =
-      env('MPESA_CALLBACK_URL').replace(/\/$/, '');
-
-    const orderId =
-      `AN-${Date.now()}-${crypto
-        .randomBytes(3)
-        .toString('hex')
-        .toUpperCase()}`;
-
-    const payload = {
-      BusinessShortCode: shortcode,
-      Password: password,
-      Timestamp: timestamp,
-      TransactionType:
-        process.env.MPESA_TRANSACTION_TYPE ||
-        'CustomerPayBillOnline',
-      Amount: total,
-      PartyA: msisdn,
-      PartyB: shortcode,
-      PhoneNumber: msisdn,
-      CallBackURL:
-        `${callbackBase}/api/mpesa/callback`,
-      AccountReference: orderId.slice(0, 12),
-      TransactionDesc: 'ANANDA order'
-    };
-
-    const r = await fetch(
-      `${base}/mpesa/stkpush/v1/processrequest`,
+    const response = await axios.post(
+      "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
       {
-        method: 'POST',
+        BusinessShortCode: shortcode,
+        Password: password,
+        Timestamp: timestamp,
+        TransactionType: "CustomerPayBillOnline",
+        Amount: Number(amount),
+        PartyA: phone,
+        PartyB: shortcode,
+        PhoneNumber: phone,
+        CallBackURL: callbackUrl,
+        AccountReference: accountReference || orderId || "ANANDA",
+        TransactionDesc:
+          transactionDesc || "Ananda Herbal Products"
+      },
+      {
         headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json"
+        }
       }
     );
 
-    const data = await r.json();
-
-    if (!r.ok || data.ResponseCode !== '0') {
-      console.error('M-PESA STK error', data);
-
-      return res.status(502).json({
-        error:
-          data.errorMessage ||
-          data.ResponseDescription ||
-          'M-PESA payment request failed.'
-      });
-    }
-
-    const orders = readOrders();
-
-    orders.push({
-      orderId,
-      name,
-      phone: msisdn,
-      email: email || '',
-      address,
-      city,
-      items: Array.isArray(items) ? items : [],
-      amount: total,
-      status: 'pending',
-      merchantRequestId: data.MerchantRequestID,
-      checkoutRequestId: data.CheckoutRequestID,
-      createdAt: new Date().toISOString()
-    });
-
-    writeOrders(orders);
-
-    res.json({
-      orderId,
-      customerMessage:
-        data.CustomerMessage ||
-        'Check your phone and enter your M-PESA PIN to complete payment.'
-    });
-
-  } catch (e) {
-    console.error(e);
+    res.json(response.data);
+  } catch (error) {
+    console.error(
+      "STK Push error:",
+      error.response?.data || error.message
+    );
 
     res.status(500).json({
-      error:
-        e.message ||
-        'Payment service is not configured.'
+      error: "Failed to initiate M-PESA payment",
+      details: error.response?.data || error.message
     });
   }
 });
 
-app.post('/api/mpesa/callback', (req, res) => {
+// -----------------------------
+// M-PESA callback
+// -----------------------------
+
+app.post("/api/mpesa/callback", (req, res) => {
   try {
+    console.log(
+      "M-PESA callback:",
+      JSON.stringify(req.body, null, 2)
+    );
+
     const callback =
       req.body?.Body?.stkCallback;
 
-    if (!callback) {
-      return res.json({
-        ResultCode: 0,
-        ResultDesc: 'Accepted'
-      });
-    }
+    if (callback) {
+      const resultCode = callback.ResultCode;
+      const resultDesc = callback.ResultDesc;
 
-    const orders = readOrders();
-
-    const idx = orders.findIndex(
-      o =>
-        o.checkoutRequestId ===
-        callback.CheckoutRequestID
-    );
-
-    if (idx >= 0) {
-      const order = orders[idx];
-
-      order.status =
-        Number(callback.ResultCode) === 0
-          ? 'paid'
-          : 'failed';
-
-      order.resultCode = callback.ResultCode;
-      order.resultDesc = callback.ResultDesc;
-
-      if (Number(callback.ResultCode) === 0) {
-        const md = Object.fromEntries(
-          (callback.CallbackMetadata?.Item || []).map(
-            x => [x.Name, x.Value]
-          )
-        );
-
-        order.mpesaReceipt =
-          md.MpesaReceiptNumber || '';
-
-        order.paidAmount =
-          md.Amount || order.amount;
-
-        order.transactionPhone =
-          md.PhoneNumber || order.phone;
-
-        order.paidAt =
-          new Date().toISOString();
-      }
-
-      writeOrders(orders);
+      console.log("M-PESA ResultCode:", resultCode);
+      console.log("M-PESA ResultDesc:", resultDesc);
     }
 
     res.json({
       ResultCode: 0,
-      ResultDesc: 'Accepted'
+      ResultDesc: "Accepted"
     });
-
-  } catch (e) {
-    console.error('Callback error', e);
+  } catch (error) {
+    console.error("Callback error:", error);
 
     res.json({
       ResultCode: 0,
-      ResultDesc: 'Accepted'
+      ResultDesc: "Accepted"
     });
   }
 });
 
-app.get('/api/orders/:id', (req, res) => {
-  const order =
-    readOrders().find(
-      o => o.orderId === req.params.id
-    );
+// -----------------------------
+// Orders
+// -----------------------------
 
-  if (!order) {
-    return res.status(404).json({
-      error: 'Order not found'
+app.post("/api/orders", (req, res) => {
+  try {
+    const orders = loadOrders();
+
+    const order = {
+      id:
+        "AN-" +
+        Date.now() +
+        "-" +
+        crypto.randomBytes(3).toString("hex").toUpperCase(),
+      ...req.body,
+      createdAt: new Date().toISOString()
+    };
+
+    orders.push(order);
+    saveOrders(orders);
+
+    res.json({
+      success: true,
+      order
+    });
+  } catch (error) {
+    console.error("Order error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Could not save order"
     });
   }
-
-  res.json({
-    orderId: order.orderId,
-    status: order.status,
-    receipt: order.mpesaReceipt || null,
-    message: order.resultDesc || null
-  });
 });
 
-// Serve index.html from the ROOT
-app.get('/{*splat}', (req, res) => {
-  res.sendFile(
-    path.join(__dirname, 'index.html')
-  );
+app.get("/api/orders", (req, res) => {
+  res.json(loadOrders());
 });
 
-app.listen(PORT, () => {
-  console.log(
-    `ANANDA website running on port ${PORT}`
-  );
+// -----------------------------
+// Website fallback
+// -----------------------------
+
+app.get("/{*splat}", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
 });
-```
+
+// -----------------------------
+// Start server
+// -----------------------------
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("Ananda server running on port " + PORT);
+});
