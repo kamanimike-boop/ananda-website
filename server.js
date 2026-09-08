@@ -5,19 +5,13 @@ const path = require("path");
 
 const app = express();
 
-// ==========================================
-// BASIC EXPRESS SETUP
-// ==========================================
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Serve website files
 app.use(express.static(__dirname));
 
-// ==========================================
-// M-PESA CONFIGURATION
-// ==========================================
+/* =========================================================
+   M-PESA CONFIGURATION
+========================================================= */
 
 const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
 const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
@@ -25,12 +19,11 @@ const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE;
 const MPESA_PASSKEY = process.env.MPESA_PASSKEY;
 const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL;
 
-// Daraja Sandbox
 const MPESA_BASE_URL = "https://sandbox.safaricom.co.ke";
 
-// ==========================================
-// ORDERS STORAGE
-// ==========================================
+/* =========================================================
+   ORDER STORAGE
+========================================================= */
 
 const dataDir = path.join(__dirname, "data");
 const ordersFile = path.join(dataDir, "orders.json");
@@ -59,9 +52,9 @@ function writeOrders(orders) {
   );
 }
 
-// ==========================================
-// HEALTH CHECK
-// ==========================================
+/* =========================================================
+   HEALTH CHECK
+========================================================= */
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -77,9 +70,9 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// ==========================================
-// KENYA TIMESTAMP
-// ==========================================
+/* =========================================================
+   KENYA TIMESTAMP
+========================================================= */
 
 function getKenyaTimestamp() {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -111,9 +104,9 @@ function getKenyaTimestamp() {
   );
 }
 
-// ==========================================
-// PHONE NUMBER NORMALIZATION
-// ==========================================
+/* =========================================================
+   PHONE NORMALIZATION
+========================================================= */
 
 function normalizePhone(phone) {
   if (!phone) {
@@ -141,9 +134,9 @@ function normalizePhone(phone) {
   return value;
 }
 
-// ==========================================
-// GET M-PESA ACCESS TOKEN
-// ==========================================
+/* =========================================================
+   ACCESS TOKEN
+========================================================= */
 
 async function getAccessToken() {
   if (!MPESA_CONSUMER_KEY || !MPESA_CONSUMER_SECRET) {
@@ -152,15 +145,13 @@ async function getAccessToken() {
     );
   }
 
-  // IMPORTANT:
-  // Do NOT use a template literal here.
-  // Do NOT hash the credentials.
   const credentials = Buffer.from(
     MPESA_CONSUMER_KEY + ":" + MPESA_CONSUMER_SECRET
   ).toString("base64");
 
   const response = await axios.get(
-    MPESA_BASE_URL + "/oauth/v1/generate?grant_type=client_credentials",
+    MPESA_BASE_URL +
+      "/oauth/v1/generate?grant_type=client_credentials",
     {
       headers: {
         Authorization: "Basic " + credentials
@@ -169,15 +160,20 @@ async function getAccessToken() {
     }
   );
 
+  if (!response.data || !response.data.access_token) {
+    throw new Error("M-PESA access token was not returned");
+  }
+
   return response.data.access_token;
 }
 
-// ==========================================
-// M-PESA STK PUSH
-// ==========================================
+/* =========================================================
+   STK PUSH
+========================================================= */
 
 app.post("/api/mpesa/stkpush", async (req, res) => {
   try {
+    console.log("");
     console.log("=================================");
     console.log("M-PESA STK PUSH REQUEST");
     console.log("=================================");
@@ -197,78 +193,147 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
 
     console.log("Customer:", name);
     console.log("Phone received:", phone);
-    console.log("Amount:", amount);
+    console.log("Amount received:", amount);
     console.log("Order ID:", orderId);
 
-    if (!MPESA_SHORTCODE || !MPESA_PASSKEY || !MPESA_CALLBACK_URL) {
+    /* -----------------------------------------
+       CHECK CONFIGURATION
+    ----------------------------------------- */
+
+    if (
+      !MPESA_CONSUMER_KEY ||
+      !MPESA_CONSUMER_SECRET ||
+      !MPESA_SHORTCODE ||
+      !MPESA_PASSKEY ||
+      !MPESA_CALLBACK_URL
+    ) {
+      console.error("M-PESA environment variables incomplete");
+
       return res.status(500).json({
+        success: false,
         error: "M-PESA configuration is incomplete"
       });
     }
+
+    /* -----------------------------------------
+       NORMALIZE PHONE
+    ----------------------------------------- */
 
     const normalizedPhone = normalizePhone(phone);
 
     if (!normalizedPhone) {
       return res.status(400).json({
-        error: "Invalid Kenyan phone number"
+        success: false,
+        error:
+          "Invalid Kenyan phone number. Use 07XXXXXXXX, 01XXXXXXXX or 254XXXXXXXXX."
       });
     }
+
+    /* -----------------------------------------
+       VALIDATE AMOUNT
+    ----------------------------------------- */
 
     const numericAmount = Number(amount);
 
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       return res.status(400).json({
+        success: false,
         error: "Invalid payment amount"
       });
     }
 
+    const finalAmount = Math.round(numericAmount);
+
+    /* -----------------------------------------
+       GET ACCESS TOKEN
+    ----------------------------------------- */
+
+    console.log("Requesting M-PESA access token...");
+
     const accessToken = await getAccessToken();
+
+    console.log("Access token received.");
+
+    /* -----------------------------------------
+       TIMESTAMP
+    ----------------------------------------- */
 
     const timestamp = getKenyaTimestamp();
 
-    // Correct Daraja password:
-    // Base64(Shortcode + Passkey + Timestamp)
-    // DO NOT SHA-256 HASH THIS.
+    console.log("Timestamp:", timestamp);
+
+    /* -----------------------------------------
+       STK PASSWORD
+
+       IMPORTANT:
+       Base64(
+         BusinessShortCode +
+         Passkey +
+         Timestamp
+       )
+
+       DO NOT SHA256 HASH IT.
+    ----------------------------------------- */
+
     const password = Buffer.from(
       MPESA_SHORTCODE +
       MPESA_PASSKEY +
       timestamp
     ).toString("base64");
 
+    /* -----------------------------------------
+       STK PAYLOAD
+    ----------------------------------------- */
+
     const payload = {
       BusinessShortCode: MPESA_SHORTCODE,
+
       Password: password,
+
       Timestamp: timestamp,
+
       TransactionType: "CustomerPayBillOnline",
-      Amount: Math.round(numericAmount),
+
+      Amount: finalAmount,
+
       PartyA: normalizedPhone,
+
       PartyB: MPESA_SHORTCODE,
+
       PhoneNumber: normalizedPhone,
+
       CallBackURL: MPESA_CALLBACK_URL,
+
       AccountReference: String(
-        accountReference || orderId || "ANANDA"
+        accountReference ||
+        orderId ||
+        "ANANDA"
       ).substring(0, 12),
+
       TransactionDesc: String(
-        transactionDesc || "ANANDA Herbal Products"
+        transactionDesc ||
+        "ANANDA Herbal Products"
       ).substring(0, 20)
     };
 
-    console.log("STK Payload:");
-    console.log({
-      BusinessShortCode: payload.BusinessShortCode,
-      Timestamp: payload.Timestamp,
-      TransactionType: payload.TransactionType,
-      Amount: payload.Amount,
-      PartyA: payload.PartyA,
-      PartyB: payload.PartyB,
-      PhoneNumber: payload.PhoneNumber,
-      CallBackURL: payload.CallBackURL,
-      AccountReference: payload.AccountReference,
-      TransactionDesc: payload.TransactionDesc
-    });
+    console.log("");
+    console.log("STK REQUEST DETAILS");
+    console.log("-----------------------------");
+    console.log("Shortcode:", MPESA_SHORTCODE);
+    console.log("Phone:", normalizedPhone);
+    console.log("Amount:", finalAmount);
+    console.log("TransactionType:", payload.TransactionType);
+    console.log("Callback:", MPESA_CALLBACK_URL);
+    console.log("AccountReference:", payload.AccountReference);
+    console.log("-----------------------------");
+
+    /* -----------------------------------------
+       SEND STK PUSH
+    ----------------------------------------- */
 
     const response = await axios.post(
-      MPESA_BASE_URL + "/mpesa/stkpush/v1/processrequest",
+      MPESA_BASE_URL +
+        "/mpesa/stkpush/v1/processrequest",
       payload,
       {
         headers: {
@@ -279,7 +344,13 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
       }
     );
 
-    console.log("STK Push response:", response.data);
+    console.log("");
+    console.log("STK PUSH RESPONSE");
+    console.log("-----------------------------");
+    console.log(
+      JSON.stringify(response.data, null, 2)
+    );
+    console.log("-----------------------------");
 
     const checkoutRequestId =
       response.data.CheckoutRequestID;
@@ -287,83 +358,162 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
     const merchantRequestId =
       response.data.MerchantRequestID;
 
-    // Save pending order
+    /* -----------------------------------------
+       IF SAFARICOM DID NOT ACCEPT REQUEST
+    ----------------------------------------- */
+
+    if (
+      response.data.ResponseCode &&
+      String(response.data.ResponseCode) !== "0"
+    ) {
+      return res.status(400).json({
+        success: false,
+        error:
+          response.data.ResponseDescription ||
+          "M-PESA rejected the STK request",
+
+        responseCode: response.data.ResponseCode
+      });
+    }
+
+    /* -----------------------------------------
+       SAVE PENDING ORDER
+    ----------------------------------------- */
+
     const orders = readOrders();
 
     orders.push({
       orderId: orderId || null,
-      merchantRequestId: merchantRequestId || null,
-      checkoutRequestId: checkoutRequestId || null,
+
+      merchantRequestId:
+        merchantRequestId || null,
+
+      checkoutRequestId:
+        checkoutRequestId || null,
 
       name: name || "",
+
       phone: normalizedPhone,
+
       email: email || "",
+
       address: address || "",
+
       city: city || "",
 
-      items: items || [],
-      amount: Math.round(numericAmount),
+      items: Array.isArray(items)
+        ? items
+        : [],
+
+      amount: finalAmount,
 
       status: "PENDING",
 
       resultCode: null,
+
       resultDesc: null,
+
       mpesaReceiptNumber: null,
 
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      transactionDate: null,
+
+      paidPhone: null,
+
+      paidAmount: null,
+
+      createdAt:
+        new Date().toISOString(),
+
+      updatedAt:
+        new Date().toISOString()
     });
 
     writeOrders(orders);
 
+    /* -----------------------------------------
+       RETURN TO WEBSITE
+    ----------------------------------------- */
+
     return res.json({
       success: true,
-      message: response.data.CustomerMessage ||
+
+      message:
+        response.data.CustomerMessage ||
         "STK Push sent successfully",
 
-      merchantRequestId: merchantRequestId,
-      checkoutRequestId: checkoutRequestId,
+      customerMessage:
+        response.data.CustomerMessage ||
+        null,
 
-      responseCode: response.data.ResponseCode,
-      responseDescription: response.data.ResponseDescription
+      merchantRequestId,
+
+      checkoutRequestId,
+
+      responseCode:
+        response.data.ResponseCode,
+
+      responseDescription:
+        response.data.ResponseDescription
     });
 
   } catch (error) {
+
+    console.error("");
     console.error("=================================");
     console.error("STK PUSH ERROR");
     console.error("=================================");
 
     if (error.response) {
+
       console.error(
-        "M-PESA response:",
-        error.response.data
+        "HTTP STATUS:",
+        error.response.status
+      );
+
+      console.error(
+        "M-PESA ERROR:",
+        JSON.stringify(
+          error.response.data,
+          null,
+          2
+        )
       );
 
       return res.status(
         error.response.status || 500
       ).json({
         success: false,
+
         error:
           error.response.data?.errorMessage ||
           error.response.data?.ResponseDescription ||
-          "M-PESA STK Push failed"
+          "M-PESA STK Push failed",
+
+        details:
+          error.response.data || null
       });
     }
 
-    console.error("Error:", error.message);
+    console.error(
+      "ERROR MESSAGE:",
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
-      error: error.message || "STK Push failed"
+      error:
+        error.message ||
+        "STK Push failed"
     });
   }
 });
 
-// ==========================================
-// M-PESA CALLBACK
-// ==========================================
+/* =========================================================
+   M-PESA CALLBACK
+========================================================= */
 
 app.post("/api/mpesa/callback", (req, res) => {
+
   console.log("");
   console.log("=================================");
   console.log("M-PESA CALLBACK RECEIVED");
@@ -374,11 +524,19 @@ app.post("/api/mpesa/callback", (req, res) => {
   );
 
   try {
+
     const callback =
       req.body?.Body?.stkCallback;
 
+    /* -----------------------------------------
+       INVALID CALLBACK
+    ----------------------------------------- */
+
     if (!callback) {
-      console.log("No stkCallback found.");
+
+      console.log(
+        "No stkCallback found."
+      );
 
       return res.json({
         ResultCode: 0,
@@ -393,161 +551,316 @@ app.post("/api/mpesa/callback", (req, res) => {
       callback.CheckoutRequestID;
 
     const resultCode =
-      callback.ResultCode;
+      Number(callback.ResultCode);
 
     const resultDesc =
-      callback.ResultDesc;
+      callback.ResultDesc || "";
+
+    console.log(
+      "MerchantRequestID:",
+      merchantRequestId
+    );
+
+    console.log(
+      "CheckoutRequestID:",
+      checkoutRequestId
+    );
+
+    console.log(
+      "ResultCode:",
+      resultCode
+    );
+
+    console.log(
+      "ResultDesc:",
+      resultDesc
+    );
+
+    /* -----------------------------------------
+       EXTRACT CALLBACK METADATA
+    ----------------------------------------- */
 
     let receiptNumber = null;
+
     let transactionDate = null;
+
     let phoneNumber = null;
+
     let amount = null;
 
-    if (Array.isArray(callback.CallbackMetadata?.Item)) {
-      const metadata =
-        callback.CallbackMetadata.Item;
+    const metadata =
+      callback.CallbackMetadata?.Item;
+
+    if (Array.isArray(metadata)) {
 
       for (const item of metadata) {
-        if (item.Name === "MpesaReceiptNumber") {
-          receiptNumber = item.Value;
+
+        if (
+          item.Name ===
+          "MpesaReceiptNumber"
+        ) {
+          receiptNumber =
+            item.Value;
         }
 
-        if (item.Name === "TransactionDate") {
-          transactionDate = item.Value;
+        if (
+          item.Name ===
+          "TransactionDate"
+        ) {
+          transactionDate =
+            item.Value;
         }
 
-        if (item.Name === "PhoneNumber") {
-          phoneNumber = item.Value;
+        if (
+          item.Name ===
+          "PhoneNumber"
+        ) {
+          phoneNumber =
+            item.Value;
         }
 
-        if (item.Name === "Amount") {
-          amount = item.Value;
+        if (
+          item.Name ===
+          "Amount"
+        ) {
+          amount =
+            item.Value;
         }
       }
     }
+
+    /* -----------------------------------------
+       FIND ORDER
+    ----------------------------------------- */
 
     const orders = readOrders();
 
-    const orderIndex = orders.findIndex(
-      order =>
-        order.checkoutRequestId ===
-        checkoutRequestId
-    );
+    const orderIndex =
+      orders.findIndex(
+        order =>
+          order.checkoutRequestId ===
+          checkoutRequestId
+      );
 
-    if (orderIndex !== -1) {
-      orders[orderIndex].resultCode = resultCode;
-      orders[orderIndex].resultDesc = resultDesc;
-      orders[orderIndex].updatedAt =
-        new Date().toISOString();
+    if (orderIndex === -1) {
 
-      if (resultCode === 0) {
-        orders[orderIndex].status = "PAID";
-        orders[orderIndex].mpesaReceiptNumber =
-          receiptNumber;
-
-        orders[orderIndex].transactionDate =
-          transactionDate;
-
-        orders[orderIndex].paidPhone =
-          phoneNumber;
-
-        orders[orderIndex].paidAmount =
-          amount;
-
-        console.log("=================================");
-        console.log("PAYMENT SUCCESSFUL");
-        console.log("=================================");
-        console.log(
-          "M-PESA Receipt:",
-          receiptNumber
-        );
-        console.log(
-          "Amount:",
-          amount
-        );
-        console.log(
-          "Phone:",
-          phoneNumber
-        );
-      } else {
-        orders[orderIndex].status = "FAILED";
-
-        console.log("=================================");
-        console.log("PAYMENT FAILED OR CANCELLED");
-        console.log("=================================");
-        console.log(
-          "ResultCode:",
-          resultCode
-        );
-        console.log(
-          "ResultDesc:",
-          resultDesc
-        );
-      }
-
-      writeOrders(orders);
-    } else {
+      console.log("");
       console.log(
-        "No matching order found for CheckoutRequestID:",
+        "WARNING: No matching order."
+      );
+
+      console.log(
+        "CheckoutRequestID:",
         checkoutRequestId
       );
+
+      console.log(
+        "MerchantRequestID:",
+        merchantRequestId
+      );
+
+      /*
+       * Still acknowledge Safaricom.
+       */
+
+      return res.json({
+        ResultCode: 0,
+        ResultDesc: "Accepted"
+      });
     }
 
+    /* -----------------------------------------
+       UPDATE ORDER
+    ----------------------------------------- */
+
+    orders[orderIndex].resultCode =
+      resultCode;
+
+    orders[orderIndex].resultDesc =
+      resultDesc;
+
+    orders[orderIndex].updatedAt =
+      new Date().toISOString();
+
+    /* -----------------------------------------
+       SUCCESS
+    ----------------------------------------- */
+
+    if (resultCode === 0) {
+
+      orders[orderIndex].status =
+        "PAID";
+
+      orders[orderIndex].mpesaReceiptNumber =
+        receiptNumber;
+
+      orders[orderIndex].transactionDate =
+        transactionDate;
+
+      orders[orderIndex].paidPhone =
+        phoneNumber;
+
+      orders[orderIndex].paidAmount =
+        amount;
+
+      console.log("");
+      console.log("=================================");
+      console.log("PAYMENT SUCCESSFUL");
+      console.log("=================================");
+
+      console.log(
+        "Receipt:",
+        receiptNumber
+      );
+
+      console.log(
+        "Amount:",
+        amount
+      );
+
+      console.log(
+        "Phone:",
+        phoneNumber
+      );
+
+    } else {
+
+      /* ---------------------------------------
+         FAILED / CANCELLED / TIMEOUT
+      --------------------------------------- */
+
+      orders[orderIndex].status =
+        "FAILED";
+
+      console.log("");
+      console.log("=================================");
+      console.log("PAYMENT FAILED / CANCELLED");
+      console.log("=================================");
+
+      console.log(
+        "ResultCode:",
+        resultCode
+      );
+
+      console.log(
+        "ResultDesc:",
+        resultDesc
+      );
+
+      /*
+       * 1037 means the STK request timed out
+       * because the user/device could not be
+       * reached.
+       *
+       * This is NOT a successful payment.
+       */
+
+      if (resultCode === 1037) {
+
+        console.log("");
+        console.log(
+          "M-PESA 1037 TIMEOUT"
+        );
+
+        console.log(
+          "The STK request was accepted but"
+        );
+
+        console.log(
+          "the M-PESA user/device could not"
+        );
+
+        console.log(
+          "be reached before timeout."
+        );
+      }
+    }
+
+    writeOrders(orders);
+
   } catch (error) {
+
     console.error(
       "Callback processing error:",
       error
     );
   }
 
-  // Always acknowledge the M-PESA callback.
+  /* -----------------------------------------
+     ALWAYS ACKNOWLEDGE CALLBACK
+  ----------------------------------------- */
+
   return res.json({
     ResultCode: 0,
     ResultDesc: "Accepted"
   });
 });
 
-// ==========================================
-// CHECK PAYMENT STATUS
-// ==========================================
+/* =========================================================
+   PAYMENT STATUS
+========================================================= */
 
 app.get(
   "/api/mpesa/payment/:checkoutRequestId",
   (req, res) => {
+
     try {
+
       const checkoutRequestId =
         req.params.checkoutRequestId;
 
-      const orders = readOrders();
+      const orders =
+        readOrders();
 
-      const order = orders.find(
-        item =>
-          item.checkoutRequestId ===
-          checkoutRequestId
-      );
+      const order =
+        orders.find(
+          item =>
+            item.checkoutRequestId ===
+            checkoutRequestId
+        );
 
       if (!order) {
+
         return res.status(404).json({
           success: false,
+
           status: "NOT_FOUND",
-          message: "Payment record not found"
+
+          message:
+            "Payment record not found"
         });
       }
 
       return res.json({
+
         success: true,
-        status: order.status,
-        orderId: order.orderId,
-        amount: order.amount,
-        resultCode: order.resultCode,
-        resultDesc: order.resultDesc,
+
+        status:
+          order.status,
+
+        orderId:
+          order.orderId,
+
+        amount:
+          order.amount,
+
+        resultCode:
+          order.resultCode,
+
+        resultDesc:
+          order.resultDesc,
+
         mpesaReceiptNumber:
-          order.mpesaReceiptNumber || null,
+          order.mpesaReceiptNumber ||
+          null,
+
         transactionDate:
-          order.transactionDate || null
+          order.transactionDate ||
+          null
       });
 
     } catch (error) {
+
       console.error(
         "Payment status error:",
         error
@@ -555,27 +868,32 @@ app.get(
 
       return res.status(500).json({
         success: false,
-        error: "Could not check payment status"
+        error:
+          "Could not check payment status"
       });
     }
   }
 );
 
-// ==========================================
-// VIEW ORDERS
-// ==========================================
+/* =========================================================
+   VIEW ORDERS
+========================================================= */
 
 app.get("/api/orders", (req, res) => {
+
   try {
-    const orders = readOrders();
+
+    const orders =
+      readOrders();
 
     return res.json({
       success: true,
       count: orders.length,
-      orders: orders
+      orders
     });
 
   } catch (error) {
+
     console.error(
       "Orders error:",
       error
@@ -583,47 +901,69 @@ app.get("/api/orders", (req, res) => {
 
     return res.status(500).json({
       success: false,
-      error: "Could not load orders"
+      error:
+        "Could not load orders"
     });
   }
 });
 
-// ==========================================
-// FRONTEND FALLBACK
-// EXPRESS 5 COMPATIBLE
-// ==========================================
+/* =========================================================
+   FRONTEND FALLBACK
+========================================================= */
 
 app.get("/{*splat}", (req, res) => {
+
   res.sendFile(
-    path.join(__dirname, "index.html")
-  );
-});
-
-// ==========================================
-// START SERVER
-// ==========================================
-
-const PORT = process.env.PORT || 10000;
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("=================================");
-  console.log("ANANDA SERVER STARTED");
-  console.log("=================================");
-  console.log("Port:", PORT);
-  console.log(
-    "M-PESA configured:",
-    Boolean(
-      MPESA_CONSUMER_KEY &&
-      MPESA_CONSUMER_SECRET &&
-      MPESA_SHORTCODE &&
-      MPESA_PASSKEY &&
-      MPESA_CALLBACK_URL
+    path.join(
+      __dirname,
+      "index.html"
     )
   );
-  console.log(
-    "Callback URL:",
-    MPESA_CALLBACK_URL
-  );
-  console.log("=================================");
 });
-```
+
+/* =========================================================
+   START SERVER
+========================================================= */
+
+const PORT =
+  process.env.PORT || 10000;
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+
+    console.log("");
+    console.log("=================================");
+    console.log("ANANDA SERVER STARTED");
+    console.log("=================================");
+
+    console.log(
+      "Port:",
+      PORT
+    );
+
+    console.log(
+      "M-PESA configured:",
+      Boolean(
+        MPESA_CONSUMER_KEY &&
+        MPESA_CONSUMER_SECRET &&
+        MPESA_SHORTCODE &&
+        MPESA_PASSKEY &&
+        MPESA_CALLBACK_URL
+      )
+    );
+
+    console.log(
+      "Callback URL:",
+      MPESA_CALLBACK_URL
+    );
+
+    console.log(
+      "Sandbox:",
+      MPESA_BASE_URL
+    );
+
+    console.log("=================================");
+  }
+);
