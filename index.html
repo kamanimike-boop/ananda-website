@@ -5,19 +5,9 @@ const path = require("path");
 
 const app = express();
 
-// ==========================================
-// BASIC EXPRESS SETUP
-// ==========================================
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Serve website files
 app.use(express.static(__dirname));
-
-// ==========================================
-// M-PESA CONFIGURATION
-// ==========================================
 
 const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
 const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
@@ -25,12 +15,7 @@ const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE;
 const MPESA_PASSKEY = process.env.MPESA_PASSKEY;
 const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL;
 
-// Daraja Sandbox
 const MPESA_BASE_URL = "https://sandbox.safaricom.co.ke";
-
-// ==========================================
-// ORDERS STORAGE
-// ==========================================
 
 const dataDir = path.join(__dirname, "data");
 const ordersFile = path.join(dataDir, "orders.json");
@@ -59,10 +44,6 @@ function writeOrders(orders) {
   );
 }
 
-// ==========================================
-// HEALTH CHECK
-// ==========================================
-
 app.get("/api/health", (req, res) => {
   res.json({
     status: "OK",
@@ -76,10 +57,6 @@ app.get("/api/health", (req, res) => {
     )
   });
 });
-
-// ==========================================
-// KENYA TIMESTAMP
-// ==========================================
 
 function getKenyaTimestamp() {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -111,10 +88,6 @@ function getKenyaTimestamp() {
   );
 }
 
-// ==========================================
-// PHONE NUMBER NORMALIZATION
-// ==========================================
-
 function normalizePhone(phone) {
   if (!phone) {
     return null;
@@ -141,10 +114,6 @@ function normalizePhone(phone) {
   return value;
 }
 
-// ==========================================
-// GET M-PESA ACCESS TOKEN
-// ==========================================
-
 async function getAccessToken() {
   if (!MPESA_CONSUMER_KEY || !MPESA_CONSUMER_SECRET) {
     throw new Error(
@@ -152,15 +121,13 @@ async function getAccessToken() {
     );
   }
 
-  // IMPORTANT:
-  // Do NOT use a template literal here.
-  // Do NOT hash the credentials.
   const credentials = Buffer.from(
     MPESA_CONSUMER_KEY + ":" + MPESA_CONSUMER_SECRET
   ).toString("base64");
 
   const response = await axios.get(
-    MPESA_BASE_URL + "/oauth/v1/generate?grant_type=client_credentials",
+    MPESA_BASE_URL +
+      "/oauth/v1/generate?grant_type=client_credentials",
     {
       headers: {
         Authorization: "Basic " + credentials
@@ -171,10 +138,6 @@ async function getAccessToken() {
 
   return response.data.access_token;
 }
-
-// ==========================================
-// M-PESA STK PUSH
-// ==========================================
 
 app.post("/api/mpesa/stkpush", async (req, res) => {
   try {
@@ -202,6 +165,7 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
 
     if (!MPESA_SHORTCODE || !MPESA_PASSKEY || !MPESA_CALLBACK_URL) {
       return res.status(500).json({
+        success: false,
         error: "M-PESA configuration is incomplete"
       });
     }
@@ -210,6 +174,7 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
 
     if (!normalizedPhone) {
       return res.status(400).json({
+        success: false,
         error: "Invalid Kenyan phone number"
       });
     }
@@ -218,6 +183,7 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
 
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       return res.status(400).json({
+        success: false,
         error: "Invalid payment amount"
       });
     }
@@ -226,9 +192,6 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
 
     const timestamp = getKenyaTimestamp();
 
-    // Correct Daraja password:
-    // Base64(Shortcode + Passkey + Timestamp)
-    // DO NOT SHA-256 HASH THIS.
     const password = Buffer.from(
       MPESA_SHORTCODE +
       MPESA_PASSKEY +
@@ -268,7 +231,8 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
     });
 
     const response = await axios.post(
-      MPESA_BASE_URL + "/mpesa/stkpush/v1/processrequest",
+      MPESA_BASE_URL +
+        "/mpesa/stkpush/v1/processrequest",
       payload,
       {
         headers: {
@@ -287,7 +251,6 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
     const merchantRequestId =
       response.data.MerchantRequestID;
 
-    // Save pending order
     const orders = readOrders();
 
     orders.push({
@@ -318,14 +281,14 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
 
     return res.json({
       success: true,
-      message: response.data.CustomerMessage ||
+      message:
+        response.data.CustomerMessage ||
         "STK Push sent successfully",
-
       merchantRequestId: merchantRequestId,
       checkoutRequestId: checkoutRequestId,
-
       responseCode: response.data.ResponseCode,
-      responseDescription: response.data.ResponseDescription
+      responseDescription:
+        response.data.ResponseDescription
     });
 
   } catch (error) {
@@ -354,14 +317,12 @@ app.post("/api/mpesa/stkpush", async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      error: error.message || "STK Push failed"
+      error:
+        error.message ||
+        "STK Push failed"
     });
   }
 });
-
-// ==========================================
-// M-PESA CALLBACK
-// ==========================================
 
 app.post("/api/mpesa/callback", (req, res) => {
   console.log("");
@@ -403,24 +364,40 @@ app.post("/api/mpesa/callback", (req, res) => {
     let phoneNumber = null;
     let amount = null;
 
-    if (Array.isArray(callback.CallbackMetadata?.Item)) {
+    if (
+      Array.isArray(
+        callback.CallbackMetadata?.Item
+      )
+    ) {
       const metadata =
         callback.CallbackMetadata.Item;
 
       for (const item of metadata) {
-        if (item.Name === "MpesaReceiptNumber") {
+        if (
+          item.Name ===
+          "MpesaReceiptNumber"
+        ) {
           receiptNumber = item.Value;
         }
 
-        if (item.Name === "TransactionDate") {
+        if (
+          item.Name ===
+          "TransactionDate"
+        ) {
           transactionDate = item.Value;
         }
 
-        if (item.Name === "PhoneNumber") {
+        if (
+          item.Name ===
+          "PhoneNumber"
+        ) {
           phoneNumber = item.Value;
         }
 
-        if (item.Name === "Amount") {
+        if (
+          item.Name ===
+          "Amount"
+        ) {
           amount = item.Value;
         }
       }
@@ -428,20 +405,27 @@ app.post("/api/mpesa/callback", (req, res) => {
 
     const orders = readOrders();
 
-    const orderIndex = orders.findIndex(
-      order =>
-        order.checkoutRequestId ===
-        checkoutRequestId
-    );
+    const orderIndex =
+      orders.findIndex(
+        order =>
+          order.checkoutRequestId ===
+          checkoutRequestId
+      );
 
     if (orderIndex !== -1) {
-      orders[orderIndex].resultCode = resultCode;
-      orders[orderIndex].resultDesc = resultDesc;
+      orders[orderIndex].resultCode =
+        resultCode;
+
+      orders[orderIndex].resultDesc =
+        resultDesc;
+
       orders[orderIndex].updatedAt =
         new Date().toISOString();
 
       if (resultCode === 0) {
-        orders[orderIndex].status = "PAID";
+        orders[orderIndex].status =
+          "PAID";
+
         orders[orderIndex].mpesaReceiptNumber =
           receiptNumber;
 
@@ -454,31 +438,54 @@ app.post("/api/mpesa/callback", (req, res) => {
         orders[orderIndex].paidAmount =
           amount;
 
-        console.log("=================================");
-        console.log("PAYMENT SUCCESSFUL");
-        console.log("=================================");
+        console.log(
+          "================================="
+        );
+
+        console.log(
+          "PAYMENT SUCCESSFUL"
+        );
+
+        console.log(
+          "================================="
+        );
+
         console.log(
           "M-PESA Receipt:",
           receiptNumber
         );
+
         console.log(
           "Amount:",
           amount
         );
+
         console.log(
           "Phone:",
           phoneNumber
         );
-      } else {
-        orders[orderIndex].status = "FAILED";
 
-        console.log("=================================");
-        console.log("PAYMENT FAILED OR CANCELLED");
-        console.log("=================================");
+      } else {
+        orders[orderIndex].status =
+          "FAILED";
+
+        console.log(
+          "================================="
+        );
+
+        console.log(
+          "PAYMENT FAILED OR CANCELLED"
+        );
+
+        console.log(
+          "================================="
+        );
+
         console.log(
           "ResultCode:",
           resultCode
         );
+
         console.log(
           "ResultDesc:",
           resultDesc
@@ -486,6 +493,7 @@ app.post("/api/mpesa/callback", (req, res) => {
       }
 
       writeOrders(orders);
+
     } else {
       console.log(
         "No matching order found for CheckoutRequestID:",
@@ -500,16 +508,11 @@ app.post("/api/mpesa/callback", (req, res) => {
     );
   }
 
-  // Always acknowledge the M-PESA callback.
   return res.json({
     ResultCode: 0,
     ResultDesc: "Accepted"
   });
 });
-
-// ==========================================
-// CHECK PAYMENT STATUS
-// ==========================================
 
 app.get(
   "/api/mpesa/payment/:checkoutRequestId",
@@ -530,7 +533,8 @@ app.get(
         return res.status(404).json({
           success: false,
           status: "NOT_FOUND",
-          message: "Payment record not found"
+          message:
+            "Payment record not found"
         });
       }
 
@@ -542,9 +546,11 @@ app.get(
         resultCode: order.resultCode,
         resultDesc: order.resultDesc,
         mpesaReceiptNumber:
-          order.mpesaReceiptNumber || null,
+          order.mpesaReceiptNumber ||
+          null,
         transactionDate:
-          order.transactionDate || null
+          order.transactionDate ||
+          null
       });
 
     } catch (error) {
@@ -555,15 +561,12 @@ app.get(
 
       return res.status(500).json({
         success: false,
-        error: "Could not check payment status"
+        error:
+          "Could not check payment status"
       });
     }
   }
 );
-
-// ==========================================
-// VIEW ORDERS
-// ==========================================
 
 app.get("/api/orders", (req, res) => {
   try {
@@ -583,46 +586,63 @@ app.get("/api/orders", (req, res) => {
 
     return res.status(500).json({
       success: false,
-      error: "Could not load orders"
+      error:
+        "Could not load orders"
     });
   }
 });
 
-// ==========================================
-// FRONTEND FALLBACK
-// EXPRESS 5 COMPATIBLE
-// ==========================================
-
 app.get("/{*splat}", (req, res) => {
   res.sendFile(
-    path.join(__dirname, "index.html")
-  );
-});
-
-// ==========================================
-// START SERVER
-// ==========================================
-
-const PORT = process.env.PORT || 10000;
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("=================================");
-  console.log("ANANDA SERVER STARTED");
-  console.log("=================================");
-  console.log("Port:", PORT);
-  console.log(
-    "M-PESA configured:",
-    Boolean(
-      MPESA_CONSUMER_KEY &&
-      MPESA_CONSUMER_SECRET &&
-      MPESA_SHORTCODE &&
-      MPESA_PASSKEY &&
-      MPESA_CALLBACK_URL
+    path.join(
+      __dirname,
+      "index.html"
     )
   );
-  console.log(
-    "Callback URL:",
-    MPESA_CALLBACK_URL
-  );
-  console.log("=================================");
 });
+
+const PORT =
+  process.env.PORT || 10000;
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      "================================="
+    );
+
+    console.log(
+      "ANANDA SERVER STARTED"
+    );
+
+    console.log(
+      "================================="
+    );
+
+    console.log(
+      "Port:",
+      PORT
+    );
+
+    console.log(
+      "M-PESA configured:",
+      Boolean(
+        MPESA_CONSUMER_KEY &&
+        MPESA_CONSUMER_SECRET &&
+        MPESA_SHORTCODE &&
+        MPESA_PASSKEY &&
+        MPESA_CALLBACK_URL
+      )
+    );
+
+    console.log(
+      "Callback URL:",
+      MPESA_CALLBACK_URL
+    );
+
+    console.log(
+      "================================="
+    );
+  }
+);
