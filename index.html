@@ -1,648 +1,830 @@
-const express = require("express");
-const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b2b1d">
+<title>ANANDA | Ayurvedic Body & Mind Healing Consultancy</title>
 
-const app = express();
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(__dirname));
-
-const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
-const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
-const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE;
-const MPESA_PASSKEY = process.env.MPESA_PASSKEY;
-const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL;
-
-const MPESA_BASE_URL = "https://sandbox.safaricom.co.ke";
-
-const dataDir = path.join(__dirname, "data");
-const ordersFile = path.join(dataDir, "orders.json");
-
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+<style>
+:root{
+  --forest:#123b2a;
+  --deep:#0b2b1d;
+  --gold:#c9a227;
+  --cream:#f7f2e7;
+  --white:#fff;
+  --muted:#6b746d;
 }
 
-if (!fs.existsSync(ordersFile)) {
-  fs.writeFileSync(ordersFile, "[]");
+*{
+  box-sizing:border-box;
 }
 
-function readOrders() {
-  try {
-    return JSON.parse(fs.readFileSync(ordersFile, "utf8"));
-  } catch (error) {
-    console.error("Could not read orders:", error);
-    return [];
-  }
+body{
+  margin:0;
+  font-family:Arial,sans-serif;
+  background:var(--cream);
+  color:#172019;
 }
 
-function writeOrders(orders) {
-  fs.writeFileSync(
-    ordersFile,
-    JSON.stringify(orders, null, 2)
-  );
+header{
+  background:var(--deep);
+  color:white;
+  padding:18px 6%;
+  position:sticky;
+  top:0;
+  z-index:10;
 }
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "OK",
-    message: "ANANDA server is running",
-    mpesaConfigured: Boolean(
-      MPESA_CONSUMER_KEY &&
-      MPESA_CONSUMER_SECRET &&
-      MPESA_SHORTCODE &&
-      MPESA_PASSKEY &&
-      MPESA_CALLBACK_URL
-    )
-  });
-});
-
-function getKenyaTimestamp() {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Africa/Nairobi",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(new Date());
-
-  const values = {};
-
-  for (const part of parts) {
-    if (part.type !== "literal") {
-      values[part.type] = part.value;
-    }
-  }
-
-  return (
-    values.year +
-    values.month +
-    values.day +
-    values.hour +
-    values.minute +
-    values.second
-  );
+nav{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:20px;
+  flex-wrap:wrap;
 }
 
-function normalizePhone(phone) {
-  if (!phone) {
-    return null;
-  }
-
-  let value = String(phone).trim();
-
-  value = value.replace(/\s+/g, "");
-  value = value.replace(/-/g, "");
-  value = value.replace(/^\+/, "");
-
-  if (value.startsWith("07") || value.startsWith("01")) {
-    value = "254" + value.substring(1);
-  }
-
-  if (value.startsWith("7") || value.startsWith("1")) {
-    value = "254" + value;
-  }
-
-  if (!/^254[17]\d{8}$/.test(value)) {
-    return null;
-  }
-
-  return value;
+.logo{
+  font-size:25px;
+  font-weight:700;
+  color:#e6c65c;
 }
 
-async function getAccessToken() {
-  if (!MPESA_CONSUMER_KEY || !MPESA_CONSUMER_SECRET) {
-    throw new Error(
-      "MPESA_CONSUMER_KEY or MPESA_CONSUMER_SECRET is missing"
-    );
-  }
-
-  const credentials = Buffer.from(
-    MPESA_CONSUMER_KEY + ":" + MPESA_CONSUMER_SECRET
-  ).toString("base64");
-
-  const response = await axios.get(
-    MPESA_BASE_URL +
-      "/oauth/v1/generate?grant_type=client_credentials",
-    {
-      headers: {
-        Authorization: "Basic " + credentials
-      },
-      timeout: 30000
-    }
-  );
-
-  return response.data.access_token;
+nav a{
+  color:white;
+  text-decoration:none;
+  margin-left:15px;
 }
 
-app.post("/api/mpesa/stkpush", async (req, res) => {
-  try {
-    console.log("=================================");
-    console.log("M-PESA STK PUSH REQUEST");
-    console.log("=================================");
-
-    const {
-      name,
-      phone,
-      email,
-      address,
-      city,
-      items,
-      amount,
-      orderId,
-      accountReference,
-      transactionDesc
-    } = req.body;
-
-    console.log("Customer:", name);
-    console.log("Phone received:", phone);
-    console.log("Amount:", amount);
-    console.log("Order ID:", orderId);
-
-    if (!MPESA_SHORTCODE || !MPESA_PASSKEY || !MPESA_CALLBACK_URL) {
-      return res.status(500).json({
-        success: false,
-        error: "M-PESA configuration is incomplete"
-      });
-    }
-
-    const normalizedPhone = normalizePhone(phone);
-
-    if (!normalizedPhone) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid Kenyan phone number"
-      });
-    }
-
-    const numericAmount = Number(amount);
-
-    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid payment amount"
-      });
-    }
-
-    const accessToken = await getAccessToken();
-
-    const timestamp = getKenyaTimestamp();
-
-    const password = Buffer.from(
-      MPESA_SHORTCODE +
-      MPESA_PASSKEY +
-      timestamp
-    ).toString("base64");
-
-    const payload = {
-      BusinessShortCode: MPESA_SHORTCODE,
-      Password: password,
-      Timestamp: timestamp,
-      TransactionType: "CustomerPayBillOnline",
-      Amount: Math.round(numericAmount),
-      PartyA: normalizedPhone,
-      PartyB: MPESA_SHORTCODE,
-      PhoneNumber: normalizedPhone,
-      CallBackURL: MPESA_CALLBACK_URL,
-      AccountReference: String(
-        accountReference || orderId || "ANANDA"
-      ).substring(0, 12),
-      TransactionDesc: String(
-        transactionDesc || "ANANDA Herbal Products"
-      ).substring(0, 20)
-    };
-
-    console.log("STK Payload:");
-    console.log({
-      BusinessShortCode: payload.BusinessShortCode,
-      Timestamp: payload.Timestamp,
-      TransactionType: payload.TransactionType,
-      Amount: payload.Amount,
-      PartyA: payload.PartyA,
-      PartyB: payload.PartyB,
-      PhoneNumber: payload.PhoneNumber,
-      CallBackURL: payload.CallBackURL,
-      AccountReference: payload.AccountReference,
-      TransactionDesc: payload.TransactionDesc
-    });
-
-    const response = await axios.post(
-      MPESA_BASE_URL +
-        "/mpesa/stkpush/v1/processrequest",
-      payload,
-      {
-        headers: {
-          Authorization: "Bearer " + accessToken,
-          "Content-Type": "application/json"
-        },
-        timeout: 30000
-      }
-    );
-
-    console.log("STK Push response:", response.data);
-
-    const checkoutRequestId =
-      response.data.CheckoutRequestID;
-
-    const merchantRequestId =
-      response.data.MerchantRequestID;
-
-    const orders = readOrders();
-
-    orders.push({
-      orderId: orderId || null,
-      merchantRequestId: merchantRequestId || null,
-      checkoutRequestId: checkoutRequestId || null,
-
-      name: name || "",
-      phone: normalizedPhone,
-      email: email || "",
-      address: address || "",
-      city: city || "",
-
-      items: items || [],
-      amount: Math.round(numericAmount),
-
-      status: "PENDING",
-
-      resultCode: null,
-      resultDesc: null,
-      mpesaReceiptNumber: null,
-
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
-
-    writeOrders(orders);
-
-    return res.json({
-      success: true,
-      message:
-        response.data.CustomerMessage ||
-        "STK Push sent successfully",
-      merchantRequestId: merchantRequestId,
-      checkoutRequestId: checkoutRequestId,
-      responseCode: response.data.ResponseCode,
-      responseDescription:
-        response.data.ResponseDescription
-    });
-
-  } catch (error) {
-    console.error("=================================");
-    console.error("STK PUSH ERROR");
-    console.error("=================================");
-
-    if (error.response) {
-      console.error(
-        "M-PESA response:",
-        error.response.data
-      );
-
-      return res.status(
-        error.response.status || 500
-      ).json({
-        success: false,
-        error:
-          error.response.data?.errorMessage ||
-          error.response.data?.ResponseDescription ||
-          "M-PESA STK Push failed"
-      });
-    }
-
-    console.error("Error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      error:
-        error.message ||
-        "STK Push failed"
-    });
-  }
-});
-
-app.post("/api/mpesa/callback", (req, res) => {
-  console.log("");
-  console.log("=================================");
-  console.log("M-PESA CALLBACK RECEIVED");
-  console.log("=================================");
-
-  console.log(
-    JSON.stringify(req.body, null, 2)
-  );
-
-  try {
-    const callback =
-      req.body?.Body?.stkCallback;
-
-    if (!callback) {
-      console.log("No stkCallback found.");
-
-      return res.json({
-        ResultCode: 0,
-        ResultDesc: "Accepted"
-      });
-    }
-
-    const merchantRequestId =
-      callback.MerchantRequestID;
-
-    const checkoutRequestId =
-      callback.CheckoutRequestID;
-
-    const resultCode =
-      callback.ResultCode;
-
-    const resultDesc =
-      callback.ResultDesc;
-
-    let receiptNumber = null;
-    let transactionDate = null;
-    let phoneNumber = null;
-    let amount = null;
-
-    if (
-      Array.isArray(
-        callback.CallbackMetadata?.Item
-      )
-    ) {
-      const metadata =
-        callback.CallbackMetadata.Item;
-
-      for (const item of metadata) {
-        if (
-          item.Name ===
-          "MpesaReceiptNumber"
-        ) {
-          receiptNumber = item.Value;
-        }
-
-        if (
-          item.Name ===
-          "TransactionDate"
-        ) {
-          transactionDate = item.Value;
-        }
-
-        if (
-          item.Name ===
-          "PhoneNumber"
-        ) {
-          phoneNumber = item.Value;
-        }
-
-        if (
-          item.Name ===
-          "Amount"
-        ) {
-          amount = item.Value;
-        }
-      }
-    }
-
-    const orders = readOrders();
-
-    const orderIndex =
-      orders.findIndex(
-        order =>
-          order.checkoutRequestId ===
-          checkoutRequestId
-      );
-
-    if (orderIndex !== -1) {
-      orders[orderIndex].resultCode =
-        resultCode;
-
-      orders[orderIndex].resultDesc =
-        resultDesc;
-
-      orders[orderIndex].updatedAt =
-        new Date().toISOString();
-
-      if (resultCode === 0) {
-        orders[orderIndex].status =
-          "PAID";
-
-        orders[orderIndex].mpesaReceiptNumber =
-          receiptNumber;
-
-        orders[orderIndex].transactionDate =
-          transactionDate;
-
-        orders[orderIndex].paidPhone =
-          phoneNumber;
-
-        orders[orderIndex].paidAmount =
-          amount;
-
-        console.log(
-          "================================="
-        );
-
-        console.log(
-          "PAYMENT SUCCESSFUL"
-        );
-
-        console.log(
-          "================================="
-        );
-
-        console.log(
-          "M-PESA Receipt:",
-          receiptNumber
-        );
-
-        console.log(
-          "Amount:",
-          amount
-        );
-
-        console.log(
-          "Phone:",
-          phoneNumber
-        );
-
-      } else {
-        orders[orderIndex].status =
-          "FAILED";
-
-        console.log(
-          "================================="
-        );
-
-        console.log(
-          "PAYMENT FAILED OR CANCELLED"
-        );
-
-        console.log(
-          "================================="
-        );
-
-        console.log(
-          "ResultCode:",
-          resultCode
-        );
-
-        console.log(
-          "ResultDesc:",
-          resultDesc
-        );
-      }
-
-      writeOrders(orders);
-
-    } else {
-      console.log(
-        "No matching order found for CheckoutRequestID:",
-        checkoutRequestId
-      );
-    }
-
-  } catch (error) {
-    console.error(
-      "Callback processing error:",
-      error
-    );
-  }
-
-  return res.json({
-    ResultCode: 0,
-    ResultDesc: "Accepted"
-  });
-});
-
-app.get(
-  "/api/mpesa/payment/:checkoutRequestId",
-  (req, res) => {
-    try {
-      const checkoutRequestId =
-        req.params.checkoutRequestId;
-
-      const orders = readOrders();
-
-      const order = orders.find(
-        item =>
-          item.checkoutRequestId ===
-          checkoutRequestId
-      );
-
-      if (!order) {
-        return res.status(404).json({
-          success: false,
-          status: "NOT_FOUND",
-          message:
-            "Payment record not found"
-        });
-      }
-
-      return res.json({
-        success: true,
-        status: order.status,
-        orderId: order.orderId,
-        amount: order.amount,
-        resultCode: order.resultCode,
-        resultDesc: order.resultDesc,
-        mpesaReceiptNumber:
-          order.mpesaReceiptNumber ||
-          null,
-        transactionDate:
-          order.transactionDate ||
-          null
-      });
-
-    } catch (error) {
-      console.error(
-        "Payment status error:",
-        error
-      );
-
-      return res.status(500).json({
-        success: false,
-        error:
-          "Could not check payment status"
-      });
-    }
-  }
+.hero{
+  padding:70px 6%;
+  background:linear-gradient(135deg,#123b2a,#1e5a40);
+  color:white;
+}
+
+.hero h1{
+  font-size:clamp(38px,7vw,72px);
+  margin:0 0 15px;
+}
+
+.hero p{
+  max-width:700px;
+  font-size:19px;
+  line-height:1.6;
+}
+
+.btn{
+  display:inline-block;
+  border:0;
+  border-radius:8px;
+  padding:13px 20px;
+  background:var(--gold);
+  color:#111;
+  font-weight:700;
+  cursor:pointer;
+  text-decoration:none;
+}
+
+section{
+  padding:55px 6%;
+  max-width:1200px;
+  margin:auto;
+}
+
+h2{
+  color:var(--forest);
+  font-size:32px;
+}
+
+.products{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+  gap:20px;
+}
+
+.card{
+  background:white;
+  border-radius:12px;
+  padding:22px;
+  box-shadow:0 5px 18px #0001;
+}
+
+.card h3{
+  margin-top:0;
+  color:var(--forest);
+}
+
+.price{
+  font-size:22px;
+  font-weight:700;
+  margin:15px 0;
+}
+
+input,
+textarea{
+  width:100%;
+  padding:13px;
+  border:1px solid #ccd2cc;
+  border-radius:7px;
+  margin:6px 0 12px;
+  font:inherit;
+}
+
+textarea{
+  min-height:90px;
+}
+
+.cart{
+  background:white;
+  padding:24px;
+  border-radius:12px;
+  box-shadow:0 5px 18px #0001;
+}
+
+#cartItems{
+  margin:10px 0 20px;
+}
+
+.notice{
+  padding:14px;
+  border-radius:8px;
+  background:#edf5ef;
+  margin:12px 0;
+  display:none;
+}
+
+footer{
+  background:var(--deep);
+  color:white;
+  text-align:center;
+  padding:30px;
+}
+
+small{
+  color:var(--muted);
+}
+</style>
+</head>
+
+<body>
+
+<header>
+<nav>
+<div class="logo">ANANDA</div>
+
+<div>
+<a href="#home">Home</a>
+<a href="#products">Products</a>
+<a href="#checkout">Checkout</a>
+</div>
+
+</nav>
+</header>
+
+
+<main>
+
+<section class="hero" id="home">
+
+<h1>Ayurvedic Body & Mind Healing</h1>
+
+<p>
+Natural herbal products and holistic wellness support from
+ANANDA GreenHerbary.
+</p>
+
+<a class="btn" href="#products">
+Explore Products
+</a>
+
+</section>
+
+
+<section id="products">
+
+<h2>Our Products</h2>
+
+<div class="products" id="productGrid"></div>
+
+</section>
+
+
+<section id="checkout">
+
+<h2>Checkout</h2>
+
+<div class="cart">
+
+<div id="cartItems">
+Your cart is empty.
+</div>
+
+<div class="price">
+Total: KSh <span id="cartTotal">0</span>
+</div>
+
+
+<form id="checkoutForm">
+
+<input
+id="name"
+required
+placeholder="Full name"
+>
+
+<input
+id="phone"
+required
+placeholder="Phone e.g. 0712345678"
+>
+
+<input
+id="email"
+type="email"
+placeholder="Email"
+>
+
+<input
+id="address"
+required
+placeholder="Delivery address"
+>
+
+<input
+id="city"
+required
+placeholder="City / Town"
+>
+
+<button
+class="btn"
+type="submit"
+>
+Pay with M-PESA
+</button>
+
+</form>
+
+
+<div
+id="notice"
+class="notice"
+></div>
+
+</div>
+
+</section>
+
+</main>
+
+
+<footer>
+© 2026 ANANDA GreenHerbary
+</footer>
+
+
+<script>
+
+const products = [
+
+{
+id:1,
+name:"Herbal Wellness Blend",
+price:800,
+description:"A carefully prepared herbal wellness blend."
+},
+
+{
+id:2,
+name:"Ayurvedic Body Oil",
+price:1200,
+description:"Traditional herbal body oil for daily wellness."
+},
+
+{
+id:3,
+name:"Natural Herbal Tea",
+price:600,
+description:"A soothing herbal tea blend."
+}
+
+];
+
+
+let cart =
+JSON.parse(
+localStorage.getItem("anandaCart") || "[]"
 );
 
-app.get("/api/orders", (req, res) => {
-  try {
-    const orders = readOrders();
 
-    return res.json({
-      success: true,
-      count: orders.length,
-      orders: orders
-    });
+function saveCart(){
 
-  } catch (error) {
-    console.error(
-      "Orders error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      error:
-        "Could not load orders"
-    });
-  }
-});
-
-app.get("/{*splat}", (req, res) => {
-  res.sendFile(
-    path.join(
-      __dirname,
-      "index.html"
-    )
-  );
-});
-
-const PORT =
-  process.env.PORT || 10000;
-
-app.listen(
-  PORT,
-  "0.0.0.0",
-  () => {
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      "ANANDA SERVER STARTED"
-    );
-
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      "Port:",
-      PORT
-    );
-
-    console.log(
-      "M-PESA configured:",
-      Boolean(
-        MPESA_CONSUMER_KEY &&
-        MPESA_CONSUMER_SECRET &&
-        MPESA_SHORTCODE &&
-        MPESA_PASSKEY &&
-        MPESA_CALLBACK_URL
-      )
-    );
-
-    console.log(
-      "Callback URL:",
-      MPESA_CALLBACK_URL
-    );
-
-    console.log(
-      "================================="
-    );
-  }
+localStorage.setItem(
+"anandaCart",
+JSON.stringify(cart)
 );
+
+renderCart();
+
+}
+
+
+function addToCart(id){
+
+const p =
+products.find(
+x => x.id === id
+);
+
+if(!p) return;
+
+const item =
+cart.find(
+x => x.id === id
+);
+
+if(item){
+
+item.qty++;
+
+}else{
+
+cart.push({
+...p,
+qty:1
+});
+
+}
+
+saveCart();
+
+document
+.getElementById("checkout")
+.scrollIntoView({
+behavior:"smooth"
+});
+
+}
+
+
+function removeFromCart(id){
+
+cart =
+cart.filter(
+x => x.id !== id
+);
+
+saveCart();
+
+}
+
+
+function renderProducts(){
+
+document
+.getElementById("productGrid")
+.innerHTML =
+
+products.map(p => `
+
+<div class="card">
+
+<h3>
+${p.name}
+</h3>
+
+<p>
+${p.description}
+</p>
+
+<div class="price">
+KSh ${p.price.toLocaleString()}
+</div>
+
+<button
+class="btn"
+onclick="addToCart(${p.id})"
+>
+Add to cart
+</button>
+
+</div>
+
+`).join("");
+
+}
+
+
+function renderCart(){
+
+const box =
+document.getElementById("cartItems");
+
+if(!cart.length){
+
+box.innerHTML =
+"Your cart is empty.";
+
+document
+.getElementById("cartTotal")
+.textContent = "0";
+
+return;
+
+}
+
+
+box.innerHTML =
+
+cart.map(i => `
+
+<div
+style="
+padding:8px 0;
+border-bottom:1px solid #eee;
+"
+>
+
+<strong>
+${i.name}
+</strong>
+
+× ${i.qty}
+
+—
+
+KSh ${(i.price*i.qty).toLocaleString()}
+
+<button
+onclick="removeFromCart(${i.id})"
+style="float:right"
+>
+Remove
+</button>
+
+</div>
+
+`).join("");
+
+
+const total =
+cart.reduce(
+(s,i) => s + i.price * i.qty,
+0
+);
+
+
+document
+.getElementById("cartTotal")
+.textContent =
+total.toLocaleString();
+
+}
+
+
+/*
+========================================
+M-PESA ORDER
+========================================
+*/
+
+async function placeOrder(){
+
+const name =
+document
+.getElementById("name")
+.value
+.trim();
+
+const phone =
+document
+.getElementById("phone")
+.value
+.trim();
+
+const email =
+document
+.getElementById("email")
+.value
+.trim();
+
+const address =
+document
+.getElementById("address")
+.value
+.trim();
+
+const city =
+document
+.getElementById("city")
+.value
+.trim();
+
+
+const total =
+cart.reduce(
+(s,i) => s + i.price * i.qty,
+0
+);
+
+
+if(!cart.length){
+
+alert(
+"Please add a product to your cart."
+);
+
+return;
+
+}
+
+
+/*
+IMPORTANT:
+Every payment gets a unique order ID.
+*/
+
+const orderId =
+"ANANDA-" + Date.now();
+
+
+const notice =
+document.getElementById("notice");
+
+
+notice.style.display =
+"block";
+
+notice.textContent =
+"Sending M-PESA payment request...";
+
+
+try{
+
+const response =
+await fetch(
+"/api/mpesa/stkpush",
+{
+
+method:"POST",
+
+headers:{
+"Content-Type":
+"application/json"
+},
+
+body:JSON.stringify({
+
+name:name,
+
+phone:phone,
+
+email:email,
+
+address:address,
+
+city:city,
+
+items:cart,
+
+amount:total,
+
+orderId:orderId,
+
+accountReference:orderId,
+
+transactionDesc:
+"ANANDA Herbal Products"
+
+})
+
+});
+
+
+const data =
+await response.json();
+
+
+if(
+!response.ok ||
+!data.success
+){
+
+throw new Error(
+data.error ||
+"M-PESA request failed"
+);
+
+}
+
+
+const checkoutRequestId =
+data.checkoutRequestId;
+
+
+notice.textContent =
+"M-PESA prompt sent. Please complete payment on your phone.";
+
+
+/*
+Start checking payment status.
+*/
+
+pollPayment(
+checkoutRequestId,
+notice
+);
+
+
+}catch(error){
+
+notice.textContent =
+error.message;
+
+alert(
+error.message
+);
+
+}
+
+}
+
+
+/*
+========================================
+CHECK M-PESA PAYMENT STATUS
+========================================
+*/
+
+async function pollPayment(
+checkoutRequestId,
+notice
+){
+
+let attempts = 0;
+
+
+const timer =
+setInterval(
+async () => {
+
+attempts++;
+
+
+try{
+
+const response =
+await fetch(
+
+"/api/mpesa/payment/" +
+encodeURIComponent(
+checkoutRequestId
+)
+
+);
+
+
+if(!response.ok){
+
+return;
+
+}
+
+
+const data =
+await response.json();
+
+
+/*
+PAYMENT SUCCESS
+*/
+
+if(
+data.status === "PAID"
+){
+
+clearInterval(timer);
+
+
+notice.innerHTML =
+
+"<strong>Payment successful.</strong>" +
+
+" Receipt: " +
+
+(
+data.mpesaReceiptNumber ||
+"confirmed"
+);
+
+
+/*
+Clear cart after successful payment.
+*/
+
+cart = [];
+
+saveCart();
+
+
+document
+.getElementById(
+"checkoutForm"
+)
+.reset();
+
+}
+
+
+/*
+PAYMENT FAILED
+*/
+
+else if(
+data.status === "FAILED"
+){
+
+clearInterval(timer);
+
+
+notice.textContent =
+
+"Payment failed or was cancelled: " +
+
+(
+data.resultDesc ||
+"Please try again."
+);
+
+}
+
+
+/*
+STOP polling after approximately
+2 minutes.
+*/
+
+else if(
+attempts >= 40
+){
+
+clearInterval(timer);
+
+
+notice.textContent =
+
+"Payment is still being processed. " +
+"Please check your M-PESA messages.";
+
+}
+
+}catch(error){
+
+console.log(
+"Payment status check:",
+error
+);
+
+}
+
+},
+3000
+);
+
+}
+
+
+/*
+========================================
+CHECKOUT FORM
+========================================
+*/
+
+document
+.getElementById("checkoutForm")
+.addEventListener(
+"submit",
+function(e){
+
+e.preventDefault();
+
+placeOrder();
+
+}
+);
+
+
+/*
+========================================
+START WEBSITE
+========================================
+*/
+
+renderProducts();
+
+renderCart();
+
+</script>
+
+</body>
+</html>
