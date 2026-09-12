@@ -41,6 +41,128 @@ const MPESA_BASE_URL =
 
 
 /* =========================================================
+   WHATSAPP BUSINESS CONFIGURATION
+========================================================= */
+
+const WHATSAPP_ACCESS_TOKEN =
+  process.env.WHATSAPP_ACCESS_TOKEN;
+
+const WHATSAPP_PHONE_NUMBER_ID =
+  process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+const WHATSAPP_BUSINESS_NUMBER =
+  process.env.WHATSAPP_BUSINESS_NUMBER;
+
+const WHATSAPP_ORDER_RECIPIENT =
+  process.env.WHATSAPP_ORDER_RECIPIENT;
+
+const WHATSAPP_GRAPH_VERSION =
+  process.env.WHATSAPP_GRAPH_VERSION;
+
+
+/* =========================================================
+   SEND WHATSAPP ORDER NOTIFICATION
+========================================================= */
+
+async function sendWhatsAppOrderNotification(order) {
+
+  if (
+    !WHATSAPP_ACCESS_TOKEN ||
+    !WHATSAPP_PHONE_NUMBER_ID ||
+    !WHATSAPP_ORDER_RECIPIENT
+  ) {
+
+    console.warn(
+      "WhatsApp notification skipped: configuration incomplete."
+    );
+
+    return false;
+  }
+
+
+  const message =
+`🌿 ANANDA GREEN HERBARY
+
+NEW PAID ORDER
+
+Order ID: ${order.orderId || ""}
+Amount: KES ${order.paidAmount || order.amount || ""}
+M-PESA Receipt: ${order.mpesaReceiptNumber || ""}
+Customer Phone: ${order.paidPhone || order.phone || ""}
+Status: PAID`;
+
+
+  const url =
+    "https://graph.facebook.com/" +
+    WHATSAPP_GRAPH_VERSION +
+    "/" +
+    WHATSAPP_PHONE_NUMBER_ID +
+    "/messages";
+
+
+  try {
+
+    const response =
+      await axios.post(
+        url,
+
+        {
+          messaging_product:
+            "whatsapp",
+
+          recipient_type:
+            "individual",
+
+          to:
+            WHATSAPP_ORDER_RECIPIENT,
+
+          type:
+            "text",
+
+          text: {
+            preview_url:
+              false,
+
+            body:
+              message
+          }
+        },
+
+        {
+          headers: {
+            Authorization:
+              "Bearer " +
+              WHATSAPP_ACCESS_TOKEN,
+
+            "Content-Type":
+              "application/json"
+          }
+        }
+      );
+
+
+    console.log(
+      "WhatsApp order notification sent:",
+      response.data?.messages?.[0]?.id || "OK"
+    );
+
+    return true;
+
+
+  } catch (error) {
+
+    console.error(
+      "WhatsApp notification error:",
+      error.response?.data ||
+      error.message
+    );
+
+    return false;
+  }
+}
+
+
+/* =========================================================
    ORDERS STORAGE
 ========================================================= */
 
@@ -1134,7 +1256,7 @@ app.post(
 
 app.post(
   "/api/mpesa/callback",
-  (req, res) => {
+  async (req, res) => {
 
     console.log("");
     console.log(
@@ -1447,6 +1569,30 @@ app.post(
 
         order.paidAmount =
           amount;
+
+
+        /* -----------------------------------------
+           WHATSAPP PAID ORDER NOTIFICATION
+        ----------------------------------------- */
+
+        if (
+          !order.whatsappNotificationSentAt
+        ) {
+
+          const whatsappSent =
+            await sendWhatsAppOrderNotification(
+              order
+            );
+
+
+          if (whatsappSent) {
+
+            order.whatsappNotificationSentAt =
+              new Date().toISOString();
+
+          }
+
+        }
 
 
         console.log("");
