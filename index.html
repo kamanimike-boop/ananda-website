@@ -1338,6 +1338,9 @@ button[onclick*="category"]::after{
 <style id="category-local-images">
 /* Category images are stored beside index.html as cat_01.jpg through cat_15.jpg. */
 </style>
+<style id="aligned-product-category-style">
+.product .productCategoryLabel{font-weight:900!important;color:#2f7d32!important}
+</style>
 </head>
 
 <body>
@@ -2643,6 +2646,60 @@ loadFirebaseCategories();
 
 /* PRODUCTS */
 
+/*
+  Align products with the new 15-category structure without requiring a
+  manual rewrite of the Firebase product records. The resolver first uses
+  product wording (name/description/benefits/how-to-use), then falls back
+  to the legacy category IDs used by the existing product data.
+*/
+function resolveAnandaCategoryId(name, description, benefits, howToUse, existingId){
+  const text = [name, description, benefits, howToUse].join(" ").toLowerCase();
+
+  const rules = [
+    ["cat_01", /\b(uti|urinary|urine|bladder|cystitis|sti|sexually transmitted)\b/],
+    ["cat_02", /\b(men|male|libido|prostate|erectile|sexual vitality|testosterone)\b/],
+    ["cat_03", /\b(women|woman|female|fertility|infertility|hormonal|hormone|menstrual|menopause|pcos|ovary|uterus)\b/],
+    ["cat_04", /\b(bone|bones|joint|joints|arthritis|arthrit|rheumat|mobility|cartilage|muscle pain|back pain)\b/],
+    ["cat_05", /\b(skin|acne|eczema|psoriasis|dermatitis|fungal skin|rash|itching)\b/],
+    ["cat_06", /\b(gastrointestinal|stomach|ulcer|gut|gastritis|digestion|digestive|bloating|constipation|diarrhea|diarrhoea|acid reflux|heartburn|gas)\b/],
+    ["cat_07", /\b(amoeba|amoeb|deworm|de-worm|worm|worms|parasite|parasites|detox|cleanse|cleansing|body cleanse)\b/],
+    ["cat_08", /\b(nervous system|nerve|nerves|neuropathy|stroke|brain|paralysis|neural)\b/],
+    ["cat_09", /\b(cardiovascular|heart|blood pressure|hypertension|cholesterol|circulation|circulatory)\b/],
+    ["cat_10", /\b(respiratory|asthma|asthmah|bronchitis|cough|lung|lungs|allerg(?:y|ies)|sinus)\b/],
+    ["cat_11", /\b(blood sugar|diabetes|diabetic|insulin|pancreas|pancreatic|glucose|metabolic)\b/],
+    ["cat_12", /\b(liver|hepatic)\b/],
+    ["cat_13", /\b(kidney|renal|uric acid|urinary stone|kidney stone)\b/],
+    ["cat_15", /\b(mental|stress|depression|depressive|anxiety|anxious|mood|insomnia|sleep|calm mind|emotional)\b/]
+  ];
+
+  for (const [id, pattern] of rules){
+    if(pattern.test(text)) return id;
+  }
+
+  // Existing product records used an older category numbering scheme.
+  const legacyMap = {
+    cat_01: "cat_02", // old Men -> new Men
+    cat_02: "cat_03", // old Women -> new Women
+    cat_03: "cat_04", // old Bones/Joints -> new Bones
+    cat_04: "cat_01", // old UTI/STI -> new UTI
+    cat_05: "cat_05", // Skin
+    cat_06: "cat_07", // Detox/parasites
+    cat_07: "cat_06", // Gastrointestinal
+    cat_08: "cat_08",
+    cat_09: "cat_09",
+    cat_10: "cat_10",
+    cat_11: "cat_11",
+    cat_12: "cat_12",
+    cat_13: "cat_13",
+    cat_14: "cat_14",
+    cat_15: "cat_15",
+    cat_16: "cat_14",
+    cat_17: "cat_14"
+  };
+
+  return legacyMap[existingId] || "cat_14";
+}
+
 let products = [];
 
 
@@ -2703,15 +2760,21 @@ function loadFirebaseProducts(){
 
                 id,
 
-                p.categoryId || p.categoryID || p.category_id || ""
+                resolveAnandaCategoryId(
+                  p.name || "",
+                  p.description || "",
+                  p.benefits || "",
+                  p.howToUse || "",
+                  p.categoryId || p.categoryID || p.category_id || ""
+                )
 
               ]
             );
 
 
           console.log(
-            "ANANDA FIREBASE PRODUCTS:",
-            products
+            "ANANDA FIREBASE PRODUCTS ALIGNED TO NEW CATEGORIES:",
+            products.map(p => ({name:p[0], categoryId:p[7]}))
           );
 
 
