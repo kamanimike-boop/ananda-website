@@ -3175,11 +3175,11 @@ body{
     <div class="ananda-welcome-bar">
       <div class="ananda-welcome-track">
         <div class="ananda-welcome-content">
-          <span>🚚 We deliver countrywide at a charge of 300 KES depending on location.</span>
+          <span>🚚 We deliver countrywide at a charge of <span class="firebase-delivery-fee">0 KES</span> depending on location.</span>
           <span>Welcome to Ananda green herbary online herbal shop.</span>
         </div>
         <div class="ananda-welcome-content" aria-hidden="true">
-          <span>🚚 We deliver countrywide at a charge of 300 KES depending on location.</span>
+          <span>🚚 We deliver countrywide at a charge of <span class="firebase-delivery-fee">0 KES</span> depending on location.</span>
           <span>Welcome to Ananda green herbary online herbal shop.</span>
         </div>
       </div>
@@ -3221,7 +3221,7 @@ body{
       <button class="topnavbtn" data-page="learn" onclick="show('learn')">Learn</button>
       <button class="topnavbtn" data-page="categories" onclick="show('categories')">Categories⌄</button>
       <button class="topnavbtn" data-page="consult" onclick="show('consult')">Consult</button>
-      <span class="nav-delivery">🚚 Countrywide Delivery<br><b>Charge: 300 KES</b></span>
+      <span class="nav-delivery">🚚 Countrywide Delivery<br><b>Charge: <span class="firebase-delivery-fee">0 KES</span></b></span>
     </nav>
   </header>
 
@@ -3265,7 +3265,7 @@ body{
           </div>
           <div class="feature-item">
             <span class="feature-icon">🚚</span>
-            <div><b>Countrywide</b><small>Delivery (300 KES)</small></div>
+            <div><b>Countrywide</b><small>Delivery (<span class="firebase-delivery-fee">0 KES</span>)</small></div>
           </div>
         </div>
 
@@ -4215,6 +4215,17 @@ onValue(
     window.anandaFirebaseSettings =
       data;
 
+    /* FIREBASE DELIVERY FEE */
+    const firebaseDeliveryFee = Number(data.deliveryFee) || 0;
+    document.querySelectorAll(".firebase-delivery-fee").forEach((el)=>{
+      el.textContent = firebaseDeliveryFee.toLocaleString() + " KES";
+    });
+
+    /* Refresh cart immediately whenever Firebase deliveryFee changes */
+    if (typeof renderCart === "function") {
+      renderCart();
+    }
+
 
     if(data.appName){
 
@@ -4880,7 +4891,10 @@ function renderCart(){
     return `<div class="card listrow"><div><div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#147bc7;font-weight:800">${x.type==="program"?"HEALTH PROGRAM BOOKING":"HERBAL PRODUCT"}</div><b>${escapeHtml(x.name)}</b>${x.description?`<div style="font-size:12px;color:#61717d;margin-top:4px">${escapeHtml(x.description)}</div>`:""}<div class="price">KES ${amount.toLocaleString()}</div></div><button style="margin-left:auto;border:0;background:none" onclick="removeCart(${n})">🗑</button></div>`;
   }).join("");
   
-  const DELIVERY_FEE = 300;
+  const DELIVERY_FEE = Number(
+    window.anandaFirebaseSettings?.deliveryFee
+  ) || 0;
+
   document.getElementById("subtotal").textContent="KES "+total.toLocaleString();
   document.getElementById("deliveryFee").textContent="KES "+DELIVERY_FEE.toLocaleString();
   document.getElementById("total").textContent="KES "+(total + DELIVERY_FEE).toLocaleString();
@@ -4997,7 +5011,10 @@ async function placeOrder(){
 
 
   const itemsTotal = orderItems.reduce((sum,p)=>sum+(Number(p.price)||0),0);
-  const total = Math.round(itemsTotal + 300); // Added KES 300 delivery fee
+  const deliveryFee = Number(
+    window.anandaFirebaseSettings?.deliveryFee
+  ) || 0;
+  const total = Math.round(itemsTotal + deliveryFee);
 
 
   const items = orderItems.map(p=>({id:p.id,type:p.type||"product",name:p.name,price:p.price}));
