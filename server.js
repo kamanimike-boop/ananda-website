@@ -35,18 +35,16 @@ app.use((req, res, next) => {
 });
 
 /* =========================================================
-   BASIC EXPRESS SETUP
+   EXPRESS
 ========================================================= */
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-/* Serve the ANANDA website */
 app.use(express.static(__dirname));
 
 
 /* =========================================================
-   M-PESA CONFIGURATION
+   M-PESA SANDBOX CONFIGURATION
 ========================================================= */
 
 const MPESA_CONSUMER_KEY =
@@ -64,13 +62,16 @@ const MPESA_PASSKEY =
 const MPESA_CALLBACK_URL =
   process.env.MPESA_CALLBACK_URL;
 
-/* Daraja Sandbox */
+/*
+ * IMPORTANT:
+ * We are intentionally using SANDBOX.
+ */
 const MPESA_BASE_URL =
   "https://sandbox.safaricom.co.ke";
 
 
 /* =========================================================
-   WHATSAPP CLOUD API CONFIGURATION
+   WHATSAPP CONFIGURATION
 ========================================================= */
 
 const WHATSAPP_TOKEN =
@@ -79,12 +80,13 @@ const WHATSAPP_TOKEN =
 const WHATSAPP_PHONE_NUMBER_ID =
   process.env.WHATSAPP_PHONE_NUMBER_ID;
 
-const ADMIN_WHATSAPP_NUMBER_RAW =
-  process.env.ADMIN_WHATSAPP_NUMBER || "0723436496";
-
-/* WhatsApp Cloud API recipient:
-   0723436496 -> 254723436496
-*/
+/*
+ * Default recipient requested:
+ * 0723436496
+ */
+const ADMIN_WHATSAPP_NUMBER =
+  process.env.ADMIN_WHATSAPP_NUMBER ||
+  "0723436496";
 
 const WHATSAPP_TEMPLATE_NAME =
   process.env.WHATSAPP_TEMPLATE_NAME ||
@@ -108,13 +110,11 @@ const dataDir =
 const ordersFile =
   path.join(dataDir, "orders.json");
 
-
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, {
     recursive: true
   });
 }
-
 
 if (!fs.existsSync(ordersFile)) {
   fs.writeFileSync(
@@ -125,12 +125,11 @@ if (!fs.existsSync(ordersFile)) {
 
 
 /* =========================================================
-   READ ORDERS
+   ORDER HELPERS
 ========================================================= */
 
 function readOrders() {
   try {
-
     const raw =
       fs.readFileSync(
         ordersFile,
@@ -156,70 +155,77 @@ function readOrders() {
 }
 
 
-/* =========================================================
-   WRITE ORDERS
-========================================================= */
-
 function writeOrders(orders) {
 
-  try {
-
-    fs.writeFileSync(
-      ordersFile,
-      JSON.stringify(
-        orders,
-        null,
-        2
-      )
-    );
-
-  } catch (error) {
-
-    console.error(
-      "Could not write orders:",
-      error
-    );
-
-    throw error;
-  }
+  fs.writeFileSync(
+    ordersFile,
+    JSON.stringify(
+      orders,
+      null,
+      2
+    )
+  );
 }
 
 
 /* =========================================================
-   HEALTH CHECK
+   PHONE NORMALIZATION
 ========================================================= */
 
-app.get(
-  "/api/health",
-  (req, res) => {
+function normalizePhone(phone) {
 
-    res.json({
-
-      status: "OK",
-
-      message:
-        "ANANDA server is running",
-
-      mpesaConfigured:
-        Boolean(
-          MPESA_CONSUMER_KEY &&
-          MPESA_CONSUMER_SECRET &&
-          MPESA_SHORTCODE &&
-          MPESA_PASSKEY &&
-          MPESA_CALLBACK_URL
-        ),
-
-      whatsappConfigured:
-        Boolean(
-          WHATSAPP_TOKEN &&
-          WHATSAPP_PHONE_NUMBER_ID &&
-          ADMIN_WHATSAPP_NUMBER_RAW
-        )
-
-    });
-
+  if (!phone) {
+    return null;
   }
-);
+
+  let value =
+    String(phone)
+      .trim()
+      .replace(/\s+/g, "")
+      .replace(/-/g, "")
+      .replace(/^\+/, "");
+
+  /*
+   * 0723436496
+   * ->
+   * 254723436496
+   */
+
+  if (
+    value.startsWith("07") ||
+    value.startsWith("01")
+  ) {
+
+    value =
+      "254" +
+      value.substring(1);
+  }
+
+  /*
+   * 723436496
+   * ->
+   * 254723436496
+   */
+
+  else if (
+    value.startsWith("7") ||
+    value.startsWith("1")
+  ) {
+
+    value =
+      "254" +
+      value;
+  }
+
+  if (
+    !/^254[17]\d{8}$/.test(value)
+  ) {
+
+    return null;
+  }
+
+  return value;
+}
 
 
 /* =========================================================
@@ -232,52 +238,31 @@ function getKenyaTimestamp() {
     new Intl.DateTimeFormat(
       "en-GB",
       {
-        timeZone:
-          "Africa/Nairobi",
-
-        year:
-          "numeric",
-
-        month:
-          "2-digit",
-
-        day:
-          "2-digit",
-
-        hour:
-          "2-digit",
-
-        minute:
-          "2-digit",
-
-        second:
-          "2-digit",
-
-        hourCycle:
-          "h23"
+        timeZone: "Africa/Nairobi",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23"
       }
     ).formatToParts(
       new Date()
     );
 
-
   const values = {};
-
 
   for (const part of parts) {
 
     if (
-      part.type !==
-      "literal"
+      part.type !== "literal"
     ) {
 
       values[part.type] =
         part.value;
-
     }
-
   }
-
 
   return (
     values.year +
@@ -291,83 +276,7 @@ function getKenyaTimestamp() {
 
 
 /* =========================================================
-   PHONE NUMBER NORMALIZATION
-========================================================= */
-
-function normalizePhone(phone) {
-
-  if (!phone) {
-    return null;
-  }
-
-
-  let value =
-    String(phone).trim();
-
-
-  value =
-    value.replace(
-      /\s+/g,
-      ""
-    );
-
-
-  value =
-    value.replace(
-      /-/g,
-      ""
-    );
-
-
-  value =
-    value.replace(
-      /^\+/,
-      ""
-    );
-
-
-  /* 07XXXXXXXX */
-  if (
-    value.startsWith("07") ||
-    value.startsWith("01")
-  ) {
-
-    value =
-      "254" +
-      value.substring(1);
-
-  }
-
-
-  /* 7XXXXXXXX / 1XXXXXXXX */
-  if (
-    value.startsWith("7") ||
-    value.startsWith("1")
-  ) {
-
-    value =
-      "254" +
-      value;
-
-  }
-
-
-  if (
-    !/^254[17]\d{8}$/.test(
-      value
-    )
-  ) {
-
-    return null;
-  }
-
-
-  return value;
-}
-
-
-/* =========================================================
-   GET M-PESA ACCESS TOKEN
+   M-PESA ACCESS TOKEN
 ========================================================= */
 
 async function getAccessToken() {
@@ -378,99 +287,53 @@ async function getAccessToken() {
   ) {
 
     throw new Error(
-      "MPESA_CONSUMER_KEY or MPESA_CONSUMER_SECRET is missing"
+      "M-PESA Consumer Key or Consumer Secret is missing."
     );
-
   }
-
-
-  /*
-    IMPORTANT:
-
-    Daraja OAuth uses:
-
-    Base64(
-      ConsumerKey:ConsumerSecret
-    )
-
-    DO NOT SHA-256 HASH THIS.
-  */
 
   const credentials =
     Buffer.from(
-      MPESA_CONSUMER_KEY +
-      ":" +
-      MPESA_CONSUMER_SECRET
+      `${MPESA_CONSUMER_KEY}:${MPESA_CONSUMER_SECRET}`
     ).toString(
       "base64"
     );
 
-
   const response =
     await axios.get(
-
-      MPESA_BASE_URL +
-      "/oauth/v1/generate?grant_type=client_credentials",
-
+      `${MPESA_BASE_URL}/oauth/v1/generate?grant_type=client_credentials`,
       {
         headers: {
-
           Authorization:
-            "Basic " +
-            credentials
-
+            `Basic ${credentials}`
         },
-
-        timeout:
-          30000
+        timeout: 30000
       }
-
     );
 
-
   if (
-    !response.data ||
-    !response.data.access_token
+    !response.data?.access_token
   ) {
 
     throw new Error(
-      "M-PESA access token was not returned"
+      "M-PESA access token was not returned."
     );
-
   }
-
 
   return response.data.access_token;
 }
 
 
 /* =========================================================
-   CREATE STK ACCOUNT REFERENCE
+   ACCOUNT REFERENCE
 ========================================================= */
 
 function createAccountReference(
   orderId
 ) {
 
-  /*
-    Daraja AccountReference has a
-    maximum length of 12 characters.
-
-    We therefore send only the first
-    12 characters to M-PESA.
-
-    The COMPLETE orderId is still
-    stored internally and linked to
-    CheckoutRequestID.
-  */
-
-  const reference =
-    String(
-      orderId ||
-      "ANANDA"
-    );
-
-  return reference.substring(
+  return String(
+    orderId || "ANANDA"
+  ).substring(
     0,
     12
   );
@@ -478,7 +341,7 @@ function createAccountReference(
 
 
 /* =========================================================
-   SEND WHATSAPP ORDER NOTIFICATION
+   WHATSAPP ORDER NOTIFICATION
 ========================================================= */
 
 async function sendWhatsAppOrderNotification(
@@ -492,56 +355,42 @@ async function sendWhatsAppOrderNotification(
     !WHATSAPP_PHONE_NUMBER_ID
   ) {
 
-    throw new Error(
-      "WhatsApp configuration is incomplete: WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID are required."
+    console.error(
+      "❌ WhatsApp credentials missing."
     );
 
+    return {
+      success: false,
+      error:
+        "WhatsApp credentials missing"
+    };
   }
 
-
-  /*
-    Convert:
-      0723436496
-
-    into:
-      254723436496
-  */
-
-  const to =
+  const recipient =
     normalizePhone(
-      ADMIN_WHATSAPP_NUMBER_RAW
+      ADMIN_WHATSAPP_NUMBER
     );
 
+  if (!recipient) {
 
-  if (!to) {
-
-    throw new Error(
-      `Invalid ADMIN_WHATSAPP_NUMBER: ${ADMIN_WHATSAPP_NUMBER_RAW}`
+    console.error(
+      "❌ Invalid WhatsApp recipient:",
+      ADMIN_WHATSAPP_NUMBER
     );
 
+    return {
+      success: false,
+      error:
+        "Invalid WhatsApp recipient"
+    };
   }
-
-
-  if (!WHATSAPP_TEMPLATE_NAME) {
-
-    throw new Error(
-      "WHATSAPP_TEMPLATE_NAME is required for automatic order notifications."
-    );
-
-  }
-
-
-  /* -----------------------------------------
-     FORMAT ORDER ITEMS
-  ----------------------------------------- */
 
   let itemsList =
-    "No items listed";
-
+    "No items";
 
   if (
     Array.isArray(order.items) &&
-    order.items.length > 0
+    order.items.length
   ) {
 
     itemsList =
@@ -550,31 +399,24 @@ async function sendWhatsAppOrderNotification(
           item =>
             `${item.name || "Item"} x${item.quantity || 1}`
         )
-        .join(
-          ", "
-        );
-
+        .join(", ");
   }
-
-
-  /* -----------------------------------------
-     WHATSAPP API URL
-  ----------------------------------------- */
 
   const url =
     `${WHATSAPP_BASE_URL}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-
   /*
-    Create/approve this WhatsApp template
-    in Meta with five BODY variables.
-
-    {{1}} Order ID
-    {{2}} Amount
-    {{3}} Customer
-    {{4}} Items
-    {{5}} M-PESA receipt
-  */
+   * IMPORTANT:
+   *
+   * The Meta template must be approved
+   * and contain FIVE body variables.
+   *
+   * {{1}} Order ID
+   * {{2}} Amount
+   * {{3}} Customer
+   * {{4}} Items
+   * {{5}} M-PESA Receipt
+   */
 
   const payload = {
 
@@ -582,8 +424,7 @@ async function sendWhatsAppOrderNotification(
       "whatsapp",
 
     to:
-
-      to,
+      recipient,
 
     type:
       "template",
@@ -594,16 +435,13 @@ async function sendWhatsAppOrderNotification(
         WHATSAPP_TEMPLATE_NAME,
 
       language: {
-
         code:
           WHATSAPP_TEMPLATE_LANGUAGE
-
       },
 
       components: [
 
         {
-
           type:
             "body",
 
@@ -615,8 +453,7 @@ async function sendWhatsAppOrderNotification(
 
               text:
                 String(
-                  order.orderId ||
-                  "-"
+                  order.orderId || "-"
                 )
             },
 
@@ -625,7 +462,7 @@ async function sendWhatsAppOrderNotification(
                 "text",
 
               text:
-                `KES ${amount ?? "-"}`
+                `KES ${amount || "-"}`
             },
 
             {
@@ -634,8 +471,7 @@ async function sendWhatsAppOrderNotification(
 
               text:
                 String(
-                  order.name ||
-                  "-"
+                  order.name || "-"
                 )
             },
 
@@ -653,33 +489,30 @@ async function sendWhatsAppOrderNotification(
 
               text:
                 String(
-                  receiptNumber ||
-                  "-"
+                  receiptNumber || "-"
                 )
             }
 
           ]
-
         }
 
       ]
-
     }
-
   };
 
-
   console.log(
-    "📱 WhatsApp notification target:",
-    to
+    "📱 Sending WhatsApp order notification..."
   );
 
+  console.log(
+    "📱 WhatsApp recipient:",
+    recipient
+  );
 
   console.log(
     "📱 WhatsApp template:",
     WHATSAPP_TEMPLATE_NAME
   );
-
 
   try {
 
@@ -688,7 +521,6 @@ async function sendWhatsAppOrderNotification(
         url,
         payload,
         {
-
           headers: {
 
             Authorization:
@@ -696,156 +528,157 @@ async function sendWhatsAppOrderNotification(
 
             "Content-Type":
               "application/json"
-
           },
 
           timeout:
             15000
-
         }
       );
 
-
-    const messageId =
-      response.data?.messages?.[0]?.id ||
-      null;
-
-
     console.log(
-      "✅ WhatsApp notification accepted by Meta:",
-      {
-
-        messageId,
-
-        to,
-
-        template:
-          WHATSAPP_TEMPLATE_NAME
-
-      }
+      "✅ WhatsApp notification accepted:",
+      JSON.stringify(
+        response.data,
+        null,
+        2
+      )
     );
 
-
     return {
-
-      success:
-        true,
-
-      messageId,
-
-      to,
-
-      response:
+      success: true,
+      data:
         response.data
-
     };
-
 
   } catch (error) {
 
-    const metaError =
+    const details =
       error.response?.data ||
       {
         message:
           error.message
       };
 
+    console.error(
+      "❌ WHATSAPP ERROR:"
+    );
 
     console.error(
-      "❌ WhatsApp notification failed:",
       JSON.stringify(
-        metaError,
+        details,
         null,
         2
       )
     );
 
-
-    throw new Error(
-      `WhatsApp send failed: ${
-        metaError?.error?.message ||
-        metaError?.message ||
-        "Unknown Meta API error"
-      }`
-    );
-
+    return {
+      success: false,
+      error:
+        details?.error?.message ||
+        details?.message ||
+        error.message
+    };
   }
-
 }
 
 
 /* =========================================================
-   WHATSAPP TEST ENDPOINT
+   HEALTH CHECK
+========================================================= */
+
+app.get(
+  "/api/health",
+  (req, res) => {
+
+    res.json({
+
+      status:
+        "OK",
+
+      sandbox:
+        true,
+
+      mpesaBaseUrl:
+        MPESA_BASE_URL,
+
+      mpesaConfigured:
+        Boolean(
+          MPESA_CONSUMER_KEY &&
+          MPESA_CONSUMER_SECRET &&
+          MPESA_SHORTCODE &&
+          MPESA_PASSKEY &&
+          MPESA_CALLBACK_URL
+        ),
+
+      whatsappConfigured:
+        Boolean(
+          WHATSAPP_TOKEN &&
+          WHATSAPP_PHONE_NUMBER_ID &&
+          ADMIN_WHATSAPP_NUMBER
+        ),
+
+      whatsappNumber:
+        normalizePhone(
+          ADMIN_WHATSAPP_NUMBER
+        ),
+
+      callbackUrl:
+        MPESA_CALLBACK_URL
+
+    });
+  }
+);
+
+
+/* =========================================================
+   TEST WHATSAPP
 ========================================================= */
 
 app.post(
   "/api/whatsapp/test",
   async (req, res) => {
 
-    try {
+    const testOrder = {
 
-      const testOrder = {
+      orderId:
+        req.body?.orderId ||
+        "TEST-ORDER",
 
-        orderId:
-          req.body?.orderId ||
-          "TEST-ORDER",
+      name:
+        req.body?.name ||
+        "WhatsApp Test",
 
-        name:
-          req.body?.name ||
-          "WhatsApp Test",
+      items:
+        Array.isArray(
+          req.body?.items
+        )
+          ? req.body.items
+          : [
+              {
+                name:
+                  "Test Item",
+                quantity:
+                  1
+              }
+            ]
+    };
 
-        items:
-          Array.isArray(
-            req.body?.items
-          )
-            ? req.body.items
-            : [
-                {
-                  name:
-                    "Test item",
-
-                  quantity:
-                    1
-                }
-              ]
-
-      };
-
-
-      const result =
-        await sendWhatsAppOrderNotification(
-          testOrder,
-
-          req.body?.amount ||
-            1,
-
-          req.body?.receipt ||
-            "TEST-RECEIPT"
-
-        );
-
-
-      return res.json(
-        result
+    const result =
+      await sendWhatsAppOrderNotification(
+        testOrder,
+        req.body?.amount || 10,
+        req.body?.receipt ||
+          "TEST-RECEIPT"
       );
 
-
-    } catch (error) {
+    if (!result.success) {
 
       return res.status(
         500
-      ).json({
-
-        success:
-          false,
-
-        error:
-          error.message
-
-      });
-
+      ).json(result);
     }
 
+    return res.json(result);
   }
 );
 
@@ -862,17 +695,14 @@ app.post(
 
       console.log("");
       console.log(
-        "================================="
+        "======================================"
       );
-
       console.log(
-        "M-PESA STK PUSH REQUEST"
+        "M-PESA SANDBOX STK PUSH"
       );
-
       console.log(
-        "================================="
+        "======================================"
       );
-
 
       const {
         name,
@@ -887,19 +717,18 @@ app.post(
         transactionDesc
       } = req.body;
 
-
       console.log(
         "Customer:",
         name
       );
 
       console.log(
-        "Phone received:",
+        "Phone:",
         phone
       );
 
       console.log(
-        "Amount received:",
+        "Amount:",
         amount
       );
 
@@ -910,10 +739,12 @@ app.post(
 
 
       /* -----------------------------------------
-         CONFIGURATION CHECK
+         CONFIGURATION
       ----------------------------------------- */
 
       if (
+        !MPESA_CONSUMER_KEY ||
+        !MPESA_CONSUMER_SECRET ||
         !MPESA_SHORTCODE ||
         !MPESA_PASSKEY ||
         !MPESA_CALLBACK_URL
@@ -927,15 +758,14 @@ app.post(
             false,
 
           error:
-            "M-PESA configuration is incomplete"
+            "M-PESA Sandbox configuration is incomplete."
 
         });
-
       }
 
 
       /* -----------------------------------------
-         ORDER ID CHECK
+         ORDER
       ----------------------------------------- */
 
       if (
@@ -951,12 +781,10 @@ app.post(
             false,
 
           error:
-            "Order ID is required"
+            "Order ID is required."
 
         });
-
       }
-
 
       const cleanOrderId =
         String(
@@ -965,14 +793,13 @@ app.post(
 
 
       /* -----------------------------------------
-         PHONE CHECK
+         PHONE
       ----------------------------------------- */
 
       const normalizedPhone =
         normalizePhone(
           phone
         );
-
 
       if (!normalizedPhone) {
 
@@ -984,22 +811,18 @@ app.post(
             false,
 
           error:
-            "Invalid Kenyan phone number"
+            "Invalid Kenyan phone number."
 
         });
-
       }
 
 
       /* -----------------------------------------
-         AMOUNT CHECK
+         AMOUNT
       ----------------------------------------- */
 
       const numericAmount =
-        Number(
-          amount
-        );
-
+        Number(amount);
 
       if (
         !Number.isFinite(
@@ -1016,12 +839,10 @@ app.post(
             false,
 
           error:
-            "Invalid payment amount"
+            "Invalid payment amount."
 
         });
-
       }
-
 
       const finalAmount =
         Math.round(
@@ -1029,40 +850,19 @@ app.post(
         );
 
 
-      if (
-        finalAmount <= 0
-      ) {
-
-        return res.status(
-          400
-        ).json({
-
-          success:
-            false,
-
-          error:
-            "Payment amount must be greater than zero"
-
-        });
-
-      }
-
-
       /* -----------------------------------------
-         GET ACCESS TOKEN
+         ACCESS TOKEN
       ----------------------------------------- */
 
       console.log(
-        "Requesting M-PESA access token..."
+        "Getting Sandbox access token..."
       );
-
 
       const accessToken =
         await getAccessToken();
 
-
       console.log(
-        "Access token received."
+        "✅ Sandbox access token received."
       );
 
 
@@ -1074,42 +874,22 @@ app.post(
         getKenyaTimestamp();
 
 
-      console.log(
-        "Timestamp:",
-        timestamp
-      );
-
-
       /* -----------------------------------------
-         DARAJA PASSWORD
+         PASSWORD
       ----------------------------------------- */
-
-      /*
-        Correct formula:
-
-        Base64(
-          Shortcode +
-          Passkey +
-          Timestamp
-        )
-
-        DO NOT SHA-256 HASH.
-      */
 
       const password =
         Buffer.from(
-
           MPESA_SHORTCODE +
           MPESA_PASSKEY +
           timestamp
-
         ).toString(
           "base64"
         );
 
 
       /* -----------------------------------------
-         ACCOUNT REFERENCE
+         REFERENCE
       ----------------------------------------- */
 
       const reference =
@@ -1122,7 +902,7 @@ app.post(
       const description =
         String(
           transactionDesc ||
-          "ANANDA Herbal Products"
+          "ANANDA Herbal"
         ).substring(
           0,
           20
@@ -1130,7 +910,7 @@ app.post(
 
 
       /* -----------------------------------------
-         STK PAYLOAD
+         STK REQUEST
       ----------------------------------------- */
 
       const payload = {
@@ -1171,18 +951,13 @@ app.post(
       };
 
 
-      console.log("");
       console.log(
-        "STK REQUEST DETAILS"
+        "Sandbox STK payload prepared."
       );
 
       console.log(
-        "-----------------------------"
-      );
-
-      console.log(
-        "Shortcode:",
-        MPESA_SHORTCODE
+        "Callback URL:",
+        MPESA_CALLBACK_URL
       );
 
       console.log(
@@ -1195,45 +970,15 @@ app.post(
         finalAmount
       );
 
-      console.log(
-        "TransactionType:",
-        "CustomerPayBillOnline"
-      );
-
-      console.log(
-        "Callback:",
-        MPESA_CALLBACK_URL
-      );
-
-      console.log(
-        "Full Order ID:",
-        cleanOrderId
-      );
-
-      console.log(
-        "AccountReference:",
-        reference
-      );
-
-      console.log(
-        "TransactionDesc:",
-        description
-      );
-
-      console.log(
-        "-----------------------------"
-      );
-
 
       /* -----------------------------------------
-         SEND STK PUSH
+         SEND STK
       ----------------------------------------- */
 
       const response =
         await axios.post(
 
-          MPESA_BASE_URL +
-          "/mpesa/stkpush/v1/processrequest",
+          `${MPESA_BASE_URL}/mpesa/stkpush/v1/processrequest`,
 
           payload,
 
@@ -1242,29 +987,20 @@ app.post(
             headers: {
 
               Authorization:
-                "Bearer " +
-                accessToken,
+                `Bearer ${accessToken}`,
 
               "Content-Type":
                 "application/json"
-
             },
 
             timeout:
               30000
-
           }
-
         );
 
 
-      console.log("");
       console.log(
-        "STK PUSH RESPONSE"
-      );
-
-      console.log(
-        "-----------------------------"
+        "M-PESA SANDBOX RESPONSE:"
       );
 
       console.log(
@@ -1275,32 +1011,19 @@ app.post(
         )
       );
 
-      console.log(
-        "-----------------------------"
-      );
-
-
-      /* -----------------------------------------
-         RESPONSE IDS
-      ----------------------------------------- */
 
       const checkoutRequestId =
-        response.data &&
-        response.data.CheckoutRequestID;
-
+        response.data?.CheckoutRequestID;
 
       const merchantRequestId =
-        response.data &&
-        response.data.MerchantRequestID;
-
+        response.data?.MerchantRequestID;
 
       const responseCode =
-        response.data &&
-        response.data.ResponseCode;
+        response.data?.ResponseCode;
 
 
       /* -----------------------------------------
-         VERIFY DARAJA ACCEPTED REQUEST
+         REJECTED
       ----------------------------------------- */
 
       if (
@@ -1318,36 +1041,30 @@ app.post(
             false,
 
           error:
-            response.data?.ResponseDescription ||
             response.data?.errorMessage ||
-            "M-PESA STK Push was not accepted",
+            response.data?.ResponseDescription ||
+            "M-PESA Sandbox rejected the STK request.",
 
           responseCode:
             responseCode ||
-            null
+            null,
+
+          mpesaResponse:
+            response.data
 
         });
-
       }
 
 
       /* -----------------------------------------
-         SAVE PENDING ORDER
+         SAVE ORDER
       ----------------------------------------- */
 
       const orders =
         readOrders();
 
-
       const now =
         new Date().toISOString();
-
-
-      /*
-        Prevent duplicate order records
-        if the same orderId is accidentally
-        submitted twice.
-      */
 
       const existingIndex =
         orders.findIndex(
@@ -1390,9 +1107,7 @@ app.post(
           "",
 
         items:
-          Array.isArray(
-            items
-          )
+          Array.isArray(items)
             ? items
             : [],
 
@@ -1427,7 +1142,7 @@ app.post(
           null,
 
         createdAt:
-          existingIndex !== -1 &&
+          existingIndex >= 0 &&
           orders[
             existingIndex
           ].createdAt
@@ -1438,12 +1153,11 @@ app.post(
 
         updatedAt:
           now
-
       };
 
 
       if (
-        existingIndex !== -1
+        existingIndex >= 0
       ) {
 
         orders[
@@ -1463,7 +1177,6 @@ app.post(
         orders.push(
           orderRecord
         );
-
       }
 
 
@@ -1472,13 +1185,11 @@ app.post(
       );
 
 
-      console.log("");
       console.log(
-        "PENDING ORDER SAVED"
+        "✅ PENDING ORDER SAVED:"
       );
 
       console.log(
-        "Order ID:",
         cleanOrderId
       );
 
@@ -1487,24 +1198,6 @@ app.post(
         checkoutRequestId
       );
 
-      console.log(
-        "Amount:",
-        finalAmount
-      );
-
-      console.log(
-        "Status:",
-        "PENDING"
-      );
-
-      console.log(
-        "================================="
-      );
-
-
-      /* -----------------------------------------
-         RETURN TO WEBSITE
-      ----------------------------------------- */
 
       return res.json({
 
@@ -1512,11 +1205,11 @@ app.post(
           true,
 
         message:
-          response.data.CustomerMessage ||
-          "STK Push sent successfully",
+          response.data?.CustomerMessage ||
+          "STK Push sent successfully.",
 
         customerMessage:
-          response.data.CustomerMessage ||
+          response.data?.CustomerMessage ||
           "Enter your M-PESA PIN to complete payment.",
 
         orderId:
@@ -1532,7 +1225,7 @@ app.post(
           responseCode,
 
         responseDescription:
-          response.data.ResponseDescription ||
+          response.data?.ResponseDescription ||
           ""
 
       });
@@ -1542,32 +1235,37 @@ app.post(
 
       console.error("");
       console.error(
-        "================================="
+        "======================================"
       );
 
       console.error(
-        "STK PUSH ERROR"
+        "❌ M-PESA SANDBOX STK ERROR"
       );
 
       console.error(
-        "================================="
+        "======================================"
       );
-
 
       if (
         error.response
       ) {
 
         console.error(
-          "M-PESA HTTP STATUS:",
+          "HTTP Status:",
           error.response.status
         );
 
         console.error(
-          "M-PESA RESPONSE:",
-          error.response.data
+          "Safaricom response:"
         );
 
+        console.error(
+          JSON.stringify(
+            error.response.data,
+            null,
+            2
+          )
+        );
 
         return res.status(
           error.response.status ||
@@ -1580,15 +1278,16 @@ app.post(
           error:
             error.response.data?.errorMessage ||
             error.response.data?.ResponseDescription ||
-            "M-PESA STK Push failed"
+            "M-PESA Sandbox request failed.",
+
+          mpesaResponse:
+            error.response.data
 
         });
-
       }
 
 
       console.error(
-        "Error:",
         error.message
       );
 
@@ -1602,12 +1301,10 @@ app.post(
 
         error:
           error.message ||
-          "M-PESA STK Push failed"
+          "M-PESA request failed."
 
       });
-
     }
-
   }
 );
 
@@ -1616,23 +1313,34 @@ app.post(
    M-PESA CALLBACK
 ========================================================= */
 
+/*
+ * IMPORTANT:
+ *
+ * This path deliberately does NOT contain
+ * "mpesa".
+ *
+ * Set:
+ *
+ * MPESA_CALLBACK_URL=
+ * https://YOUR-DOMAIN/api/payment/callback
+ */
+
 app.post(
-  "/api/mpesa/callback",
-  (req, res) => {
+  "/api/payment/callback",
+  async (req, res) => {
 
     console.log("");
     console.log(
-      "================================="
+      "======================================"
     );
 
     console.log(
-      "M-PESA CALLBACK RECEIVED"
+      "M-PESA SANDBOX CALLBACK RECEIVED"
     );
 
     console.log(
-      "================================="
+      "======================================"
     );
-
 
     console.log(
       JSON.stringify(
@@ -1649,16 +1357,7 @@ app.post(
         req.body?.Body?.stkCallback;
 
 
-      /* -----------------------------------------
-         INVALID CALLBACK
-      ----------------------------------------- */
-
       if (!callback) {
-
-        console.log(
-          "No stkCallback found."
-        );
-
 
         return res.json({
 
@@ -1669,39 +1368,26 @@ app.post(
             "Accepted"
 
         });
-
       }
 
-
-      /* -----------------------------------------
-         BASIC CALLBACK DATA
-      ----------------------------------------- */
 
       const merchantRequestId =
         callback.MerchantRequestID ||
         null;
 
-
       const checkoutRequestId =
         callback.CheckoutRequestID ||
         null;
-
 
       const resultCode =
         Number(
           callback.ResultCode
         );
 
-
       const resultDesc =
         callback.ResultDesc ||
         "";
 
-
-      console.log(
-        "MerchantRequestID:",
-        merchantRequestId
-      );
 
       console.log(
         "CheckoutRequestID:",
@@ -1720,7 +1406,7 @@ app.post(
 
 
       /* -----------------------------------------
-         EXTRACT CALLBACK METADATA
+         CALLBACK METADATA
       ----------------------------------------- */
 
       let receiptNumber =
@@ -1743,14 +1429,11 @@ app.post(
 
 
       if (
-        Array.isArray(
-          metadata
-        )
+        Array.isArray(metadata)
       ) {
 
         for (
-          const item
-          of metadata
+          const item of metadata
         ) {
 
           if (
@@ -1760,9 +1443,7 @@ app.post(
 
             receiptNumber =
               item.Value;
-
           }
-
 
           if (
             item.Name ===
@@ -1771,9 +1452,7 @@ app.post(
 
             transactionDate =
               item.Value;
-
           }
-
 
           if (
             item.Name ===
@@ -1782,9 +1461,7 @@ app.post(
 
             phoneNumber =
               item.Value;
-
           }
-
 
           if (
             item.Name ===
@@ -1793,11 +1470,8 @@ app.post(
 
             amount =
               item.Value;
-
           }
-
         }
-
       }
 
 
@@ -1808,15 +1482,11 @@ app.post(
       const orders =
         readOrders();
 
-
       const orderIndex =
         orders.findIndex(
-
           order =>
-
             order.checkoutRequestId ===
             checkoutRequestId
-
         );
 
 
@@ -1824,51 +1494,10 @@ app.post(
         orderIndex === -1
       ) {
 
-        console.log("");
-        console.log(
-          "================================="
-        );
-
-        console.log(
-          "WARNING: NO MATCHING ORDER"
-        );
-
-        console.log(
-          "================================="
-        );
-
-        console.log(
-          "CheckoutRequestID:",
+        console.error(
+          "⚠️ No matching order for callback:",
           checkoutRequestId
         );
-
-        console.log(
-          "MerchantRequestID:",
-          merchantRequestId
-        );
-
-        console.log(
-          "ResultCode:",
-          resultCode
-        );
-
-        console.log(
-          "ResultDesc:",
-          resultDesc
-        );
-
-        console.log(
-          "This callback did not originate from a saved ANANDA order."
-        );
-
-        console.log(
-          "================================="
-        );
-
-
-        /*
-          Always acknowledge Safaricom.
-        */
 
         return res.json({
 
@@ -1879,13 +1508,8 @@ app.post(
             "Accepted"
 
         });
-
       }
 
-
-      /* -----------------------------------------
-         ORDER FOUND
-      ----------------------------------------- */
 
       const order =
         orders[
@@ -1896,10 +1520,8 @@ app.post(
       order.resultCode =
         resultCode;
 
-
       order.resultDesc =
         resultDesc;
-
 
       order.updatedAt =
         new Date().toISOString();
@@ -1916,18 +1538,14 @@ app.post(
         order.status =
           "PAID";
 
-
         order.mpesaReceiptNumber =
           receiptNumber;
-
 
         order.transactionDate =
           transactionDate;
 
-
         order.paidPhone =
           phoneNumber;
-
 
         order.paidAmount =
           amount;
@@ -1935,30 +1553,20 @@ app.post(
 
         console.log("");
         console.log(
-          "================================="
+          "======================================"
         );
 
         console.log(
-          "PAYMENT SUCCESSFUL"
+          "✅ M-PESA PAYMENT SUCCESSFUL"
         );
 
         console.log(
-          "================================="
+          "======================================"
         );
 
         console.log(
-          "Order ID:",
+          "Order:",
           order.orderId
-        );
-
-        console.log(
-          "CheckoutRequestID:",
-          checkoutRequestId
-        );
-
-        console.log(
-          "M-PESA Receipt:",
-          receiptNumber
         );
 
         console.log(
@@ -1967,171 +1575,84 @@ app.post(
         );
 
         console.log(
-          "Phone:",
-          phoneNumber
-        );
-
-        console.log(
-          "Transaction Date:",
-          transactionDate
-        );
-
-        console.log(
-          "Status:",
-          "PAID"
-        );
-
-        console.log(
-          "================================="
-        );
-
-
-        /* -----------------------------------------
-           SEND WHATSAPP NOTIFICATION TO ADMIN
-        ----------------------------------------- */
-
-        sendWhatsAppOrderNotification(
-          order,
-          amount,
+          "Receipt:",
           receiptNumber
-        )
-          .then(
-            whatsappResult => {
+        );
 
-              console.log(
-                "WhatsApp order notification result:",
-                whatsappResult
-              );
 
-            }
-          )
-          .catch(
-            whatsappError => {
+        writeOrders(
+          orders
+        );
 
-              console.error(
-                "⚠️ Order was paid, but WhatsApp notification could not be delivered:",
-                whatsappError.message
-              );
 
-            }
+        /* ---------------------------------------
+           WHATSAPP
+        --------------------------------------- */
+
+        const whatsappResult =
+          await sendWhatsAppOrderNotification(
+            order,
+            amount,
+            receiptNumber
           );
 
 
-      } else {
+        if (
+          whatsappResult?.success
+        ) {
 
-        /* ---------------------------------------
-           PAYMENT FAILED / CANCELLED / TIMEOUT
-        --------------------------------------- */
+          console.log(
+            "✅ WhatsApp order notification sent."
+          );
+
+        } else {
+
+          console.error(
+            "⚠️ Payment succeeded but WhatsApp failed:",
+            whatsappResult
+          );
+        }
+
+
+      } else {
 
         order.status =
           "FAILED";
 
 
-        console.log("");
+        writeOrders(
+          orders
+        );
+
+
         console.log(
-          "================================="
+          "❌ PAYMENT FAILED:"
         );
 
         console.log(
-          "PAYMENT FAILED / CANCELLED"
-        );
-
-        console.log(
-          "================================="
-        );
-
-        console.log(
-          "Order ID:",
-          order.orderId
-        );
-
-        console.log(
-          "CheckoutRequestID:",
-          checkoutRequestId
-        );
-
-        console.log(
-          "ResultCode:",
+          "Code:",
           resultCode
         );
 
         console.log(
-          "ResultDesc:",
+          "Description:",
           resultDesc
         );
-
-
-        if (
-          resultCode === 1032
-        ) {
-
-          console.log(
-            "Reason: Request cancelled by user."
-          );
-
-        }
-
-
-        if (
-          resultCode === 1037
-        ) {
-
-          console.log(
-            "Reason: STK request timed out because the user/device could not be reached."
-          );
-
-        }
-
-
-        if (
-          resultCode === 1
-        ) {
-
-          console.log(
-            "Reason: Insufficient balance."
-          );
-
-        }
-
-
-        console.log(
-          "Status:",
-          "FAILED"
-        );
-
-        console.log(
-          "================================="
-        );
-
       }
-
-
-      /* -----------------------------------------
-         SAVE UPDATED ORDER
-      ----------------------------------------- */
-
-      writeOrders(
-        orders
-      );
 
 
     } catch (error) {
 
-      console.error("");
       console.error(
-        "Callback processing error:"
-      );
-
-      console.error(
+        "❌ Callback processing error:",
         error
       );
-
     }
 
 
-    /* -----------------------------------------
-       ALWAYS ACKNOWLEDGE SAFARICOM
-    ----------------------------------------- */
+    /*
+     * Always acknowledge Safaricom.
+     */
 
     return res.json({
 
@@ -2142,13 +1663,12 @@ app.post(
         "Accepted"
 
     });
-
   }
 );
 
 
 /* =========================================================
-   CHECK PAYMENT STATUS
+   PAYMENT STATUS
 ========================================================= */
 
 app.get(
@@ -2179,7 +1699,6 @@ app.get(
             "CheckoutRequestID is required"
 
         });
-
       }
 
 
@@ -2189,17 +1708,13 @@ app.get(
 
       const order =
         orders.find(
-
           item =>
             item.checkoutRequestId ===
             checkoutRequestId
-
         );
 
 
-      if (
-        !order
-      ) {
+      if (!order) {
 
         return res.status(
           404
@@ -2212,137 +1727,9 @@ app.get(
             "NOT_FOUND",
 
           message:
-            "Payment record not found",
-
-          checkoutRequestId:
-            checkoutRequestId
+            "Payment record not found"
 
         });
-
-      }
-
-
-      return res.json({
-
-        success:
-          true,
-
-        status:
-          order.status,
-
-        orderId:
-          order.orderId,
-
-        amount:
-          order.amount,
-
-        resultCode:
-          order.resultCode,
-
-        resultDesc:
-          order.resultDesc,
-
-        mpesaReceiptNumber:
-          order.mpesaReceiptNumber ||
-          null,
-
-        transactionDate:
-          order.transactionDate ||
-          null,
-
-        paidPhone:
-          order.paidPhone ||
-          null,
-
-        paidAmount:
-          order.paidAmount ||
-          null,
-
-        createdAt:
-          order.createdAt,
-
-        updatedAt:
-          order.updatedAt
-
-      });
-
-
-    } catch (error) {
-
-      console.error(
-        "Payment status error:",
-        error
-      );
-
-
-      return res.status(
-        500
-      ).json({
-
-        success:
-          false,
-
-        error:
-          "Could not check payment status"
-
-      });
-
-    }
-
-  }
-);
-
-
-/* =========================================================
-   GET ONE ORDER BY ORDER ID
-========================================================= */
-
-app.get(
-  "/api/orders/:orderId",
-  (req, res) => {
-
-    try {
-
-      const orderId =
-        req.params.orderId;
-
-
-      const orders =
-        readOrders();
-
-
-      const order =
-        orders.find(
-
-          item =>
-            item.orderId ===
-            orderId
-
-        );
-
-
-      if (
-        !order
-      ) {
-
-        return res.status(
-          404
-        ).json({
-
-          success:
-            false,
-
-          status:
-            "NOT_FOUND",
-
-          message:
-            "Order not found",
-
-          orderId:
-            orderId
-
-        });
-
       }
 
 
@@ -2383,15 +1770,7 @@ app.get(
           null,
 
         checkoutRequestId:
-          order.checkoutRequestId ||
-          null,
-
-        merchantRequestId:
-          order.merchantRequestId ||
-          null,
-
-        createdAt:
-          order.createdAt,
+          order.checkoutRequestId,
 
         updatedAt:
           order.updatedAt
@@ -2402,7 +1781,7 @@ app.get(
     } catch (error) {
 
       console.error(
-        "Order lookup error:",
+        "Payment status error:",
         error
       );
 
@@ -2415,73 +1794,94 @@ app.get(
           false,
 
         error:
-          "Could not load order"
+          "Could not check payment status"
 
       });
-
     }
-
   }
 );
 
 
 /* =========================================================
-   VIEW ALL ORDERS
+   GET ONE ORDER
+========================================================= */
+
+app.get(
+  "/api/orders/:orderId",
+  (req, res) => {
+
+    const orderId =
+      req.params.orderId;
+
+    const orders =
+      readOrders();
+
+    const order =
+      orders.find(
+        item =>
+          item.orderId ===
+          orderId
+      );
+
+
+    if (!order) {
+
+      return res.status(
+        404
+      ).json({
+
+        success:
+          false,
+
+        error:
+          "Order not found"
+
+      });
+    }
+
+
+    return res.json({
+
+      success:
+        true,
+
+      order:
+        order
+
+    });
+  }
+);
+
+
+/* =========================================================
+   ALL ORDERS
 ========================================================= */
 
 app.get(
   "/api/orders",
   (req, res) => {
 
-    try {
+    const orders =
+      readOrders();
 
-      const orders =
-        readOrders();
+    res.json({
 
+      success:
+        true,
 
-      return res.json({
+      count:
+        orders.length,
 
-        success:
-          true,
+      orders:
+        orders
 
-        count:
-          orders.length,
-
-        orders:
-          orders
-
-      });
-
-
-    } catch (error) {
-
-      console.error(
-        "Orders error:",
-        error
-      );
-
-
-      return res.status(
-        500
-      ).json({
-
-        success:
-          false,
-
-        error:
-          "Could not load orders"
-
-      });
-
-    }
-
+    });
   }
 );
 
 
 /* =========================================================
-   FRONTEND FALLBACK
-   EXPRESS 5 COMPATIBLE
+   FRONTEND
 ========================================================= */
 
 app.get(
@@ -2494,7 +1894,6 @@ app.get(
         "index.html"
       )
     );
-
   }
 );
 
@@ -2515,7 +1914,7 @@ app.listen(
 
     console.log("");
     console.log(
-      "================================="
+      "======================================"
     );
 
     console.log(
@@ -2523,7 +1922,7 @@ app.listen(
     );
 
     console.log(
-      "================================="
+      "======================================"
     );
 
     console.log(
@@ -2532,26 +1931,38 @@ app.listen(
     );
 
     console.log(
+      "M-PESA MODE: SANDBOX"
+    );
+
+    console.log(
+      "M-PESA URL:",
+      MPESA_BASE_URL
+    );
+
+    console.log(
       "M-PESA configured:",
       Boolean(
-
         MPESA_CONSUMER_KEY &&
         MPESA_CONSUMER_SECRET &&
         MPESA_SHORTCODE &&
         MPESA_PASSKEY &&
         MPESA_CALLBACK_URL
-
       )
     );
 
     console.log(
       "WhatsApp configured:",
       Boolean(
-
         WHATSAPP_TOKEN &&
         WHATSAPP_PHONE_NUMBER_ID &&
-        ADMIN_WHATSAPP_NUMBER_RAW
+        ADMIN_WHATSAPP_NUMBER
+      )
+    );
 
+    console.log(
+      "WhatsApp recipient:",
+      normalizePhone(
+        ADMIN_WHATSAPP_NUMBER
       )
     );
 
@@ -2561,13 +1972,7 @@ app.listen(
     );
 
     console.log(
-      "Sandbox:",
-      MPESA_BASE_URL
+      "======================================"
     );
-
-    console.log(
-      "================================="
-    );
-
   }
 );
