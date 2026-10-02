@@ -152,27 +152,53 @@ function normalizePhoneMpesa(phone) {
    WHATSAPP HELPERS
    ========================================================= */
 
-function normalizePhoneWhatsApp(phone) {
-  if (phone === null || phone === undefined) return null;
-  let p = String(phone).replace(/\D/g, "");
-  if (!p) return null;
-  if (p.startsWith("0")) p = "254" + p.slice(1);
-  else if (p.startsWith("7") || p.startsWith("1")) p = "254" + p;
-  else if (p.startsWith("2540")) p = "254" + p.slice(4);
+function normalizePhone(phone) {
+
+  if (phone === null || phone === undefined) {
+    return null;
+  }
+
+  let p =
+    String(phone).replace(/\D/g, "");
+
+  if (!p) {
+    return null;
+  }
+
+  if (p.startsWith("0")) {
+    p = "254" + p.slice(1);
+  } else if (p.startsWith("7") || p.startsWith("1")) {
+    p = "254" + p;
+  } else if (p.startsWith("2540")) {
+    p = "254" + p.slice(4);
+  }
+
   return p;
+
 }
 
-/**
- * Send an order-confirmation WhatsApp message.
- * Returns { success, messageId?, error?, code?, subcode?, details? }
- */
-async function sendWhatsAppOrderNotification(order, amount, receiptNumber) {
 
-  const token         = process.env.WHATSAPP_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const templateName  = process.env.WHATSAPP_TEMPLATE_NAME || "";
-  const templateLang  = process.env.WHATSAPP_TEMPLATE_LANG || "en";
-  const apiVersion    = process.env.WHATSAPP_API_VERSION || "v21.0";
+async function sendWhatsAppOrderNotification(
+  order,
+  amount,
+  receiptNumber
+) {
+
+  const token =
+    process.env.WHATSAPP_TOKEN;
+
+  const phoneNumberId =
+    process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  const templateName =
+    process.env.WHATSAPP_TEMPLATE_NAME || "";
+
+  const templateLang =
+    process.env.WHATSAPP_TEMPLATE_LANG || "en";
+
+  const apiVersion =
+    process.env.WHATSAPP_API_VERSION || "v21.0";
+
 
   const rawPhone =
     order?.customerPhone ||
@@ -181,7 +207,9 @@ async function sendWhatsAppOrderNotification(order, amount, receiptNumber) {
     order?.paidPhone ||
     null;
 
-  const to = normalizePhoneWhatsApp(rawPhone);
+  const to =
+    normalizePhone(rawPhone);
+
 
   console.log("");
   console.log("📲 WhatsApp notification");
@@ -191,63 +219,120 @@ async function sendWhatsAppOrderNotification(order, amount, receiptNumber) {
   console.log("   amount  :", amount);
   console.log("   receipt :", receiptNumber);
 
+
   if (!token) {
-    const err = "Missing WHATSAPP_TOKEN env var";
+
+    const err =
+      "Missing WHATSAPP_TOKEN env var";
+
     console.error("⚠️", err);
+
     return { success: false, error: err };
+
   }
 
   if (!phoneNumberId) {
-    const err = "Missing WHATSAPP_PHONE_NUMBER_ID env var";
+
+    const err =
+      "Missing WHATSAPP_PHONE_NUMBER_ID env var";
+
     console.error("⚠️", err);
+
     return { success: false, error: err };
+
   }
 
   if (!to) {
-    const err = "No valid customer phone on order";
+
+    const err =
+      "No valid customer phone on order";
+
     console.error("⚠️", err);
+
     return { success: false, error: err };
+
   }
+
 
   const url =
     `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
 
+
+  /* -------------------------------------------------------
+     BUILD PAYLOAD
+     -------------------------------------------------------
+     Templates are REQUIRED for business-initiated messages
+     outside the 24-hour customer-service window.
+     ------------------------------------------------------- */
+
   let payload;
+
 
   if (templateName) {
 
-    /* Template message — required for business-initiated
-       messages outside the 24-hour customer service window. */
     payload = {
+
       messaging_product: "whatsapp",
+
       to,
+
       type: "template",
+
       template: {
+
         name: templateName,
+
         language: { code: templateLang },
+
         components: [
+
           {
+
             type: "body",
+
             parameters: [
-              { type: "text", text: String(order?.orderId ?? "") },
-              { type: "text", text: String(amount ?? "") },
-              { type: "text", text: String(receiptNumber ?? "-") }
+
+              {
+                type: "text",
+                text: String(order?.orderId ?? "")
+              },
+
+              {
+                type: "text",
+                text: String(amount ?? "")
+              },
+
+              {
+                type: "text",
+                text: String(receiptNumber ?? "-")
+              }
+
             ]
+
           }
+
         ]
+
       }
+
     };
 
   } else {
 
-    /* Fallback free-form text — only works inside the
-       24-hour customer service window. */
+    /* Fallback — only works inside the 24-hour window. */
+
     payload = {
+
       messaging_product: "whatsapp",
+
       to,
+
       type: "text",
+
       text: {
+
         preview_url: false,
+
         body:
 `✅ Payment received
 
@@ -256,56 +341,145 @@ Amount:  KES ${amount ?? ""}
 Receipt: ${receiptNumber ?? "-"}
 
 Thank you for your order!`
+
       }
+
     };
 
   }
 
+
+  /* -------------------------------------------------------
+     SEND
+     ------------------------------------------------------- */
+
   try {
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
+    const resp =
+      await fetch(url, {
 
-    const rawText = await resp.text();
+        method: "POST",
+
+        headers: {
+
+          Authorization:
+            `Bearer ${token}`,
+
+          "Content-Type":
+            "application/json"
+
+        },
+
+        body: JSON.stringify(payload)
+
+      });
+
+
+    const rawText =
+      await resp.text();
 
     let data;
-    try { data = JSON.parse(rawText); } catch { data = { raw: rawText }; }
 
-    console.log("📲 WhatsApp API status:", resp.status);
-    console.log("📲 WhatsApp API body:", JSON.stringify(data, null, 2));
+    try {
 
-    if (!resp.ok) {
-      const apiErr = data?.error || {};
-      return {
-        success: false,
-        status:  resp.status,
-        error:   apiErr.message || "WhatsApp Graph API error",
-        code:    apiErr.code,
-        subcode: apiErr.error_subcode,
-        details: data
-      };
+      data = JSON.parse(rawText);
+
+    } catch {
+
+      data = { raw: rawText };
+
     }
 
+
+    /* ALWAYS log the full response — this is the key
+       diagnostic if the message doesn't arrive. */
+
+    console.log(
+      "📲 WhatsApp API status:",
+      resp.status
+    );
+
+    console.log(
+      "📲 WhatsApp API body:",
+      JSON.stringify(data, null, 2)
+    );
+
+
+    if (!resp.ok) {
+
+      const apiErr =
+        data?.error || {};
+
+      return {
+
+        success: false,
+
+        status: resp.status,
+
+        error:
+          apiErr.message ||
+          "WhatsApp Graph API error",
+
+        code:
+          apiErr.code,
+
+        subcode:
+          apiErr.error_subcode,
+
+        details: data
+
+      };
+
+    }
+
+
     return {
-      success:   true,
-      messageId: data?.messages?.[0]?.id || null,
-      details:   data
+
+      success: true,
+
+      messageId:
+        data?.messages?.[0]?.id || null,
+
+      details: data
+
     };
 
   } catch (err) {
 
-    console.error("📲 WhatsApp fetch threw:", err);
-    return { success: false, error: err?.message || String(err) };
+    console.error(
+      "📲 WhatsApp fetch threw:",
+      err
+    );
+
+    return {
+
+      success: false,
+
+      error: err?.message || String(err)
+
+    };
 
   }
 
 }
+
+
+/* =========================================================
+   M-PESA CALLBACK
+   ========================================================= */
+
+/*
+ * IMPORTANT:
+ *
+ * Safaricom callback URL:
+ *
+ * https://www.anandagreenherbary.co.ke/api/mpesa/callback
+ *
+ * This route is intentionally available at /api/mpesa/callback
+ * so it matches the MPESA_CALLBACK_URL environment variable.
+ *
+ * /api/payment/callback is also supported below.
+ */
 
 /* =========================================================
    STK PUSH ROUTE
@@ -470,123 +644,315 @@ async function handleMpesaCallback(req, res) {
 
   console.log("");
   console.log("======================================");
-  console.log("M-PESA CALLBACK RECEIVED");
+  console.log("M-PESA SANDBOX CALLBACK RECEIVED");
   console.log("======================================");
-  console.log(JSON.stringify(req.body, null, 2));
+
+  console.log(
+    JSON.stringify(req.body, null, 2)
+  );
 
   try {
 
-    const callback = req.body?.Body?.stkCallback;
+    const callback =
+      req.body?.Body?.stkCallback;
+
+    /*
+     * If Safaricom sends an unexpected callback,
+     * acknowledge it so Safaricom does not keep retrying.
+     */
 
     if (!callback) {
-      return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+
+      return res.json({
+        ResultCode: 0,
+        ResultDesc: "Accepted"
+      });
+
     }
 
-    const merchantRequestId = callback.MerchantRequestID || null;
-    const checkoutRequestId = callback.CheckoutRequestID || null;
-    const resultCode        = Number(callback.ResultCode);
-    const resultDesc        = callback.ResultDesc || "";
+    const merchantRequestId =
+      callback.MerchantRequestID || null;
 
-    console.log("MerchantRequestID:", merchantRequestId);
-    console.log("CheckoutRequestID:", checkoutRequestId);
-    console.log("ResultCode:",        resultCode);
-    console.log("ResultDesc:",        resultDesc);
+    const checkoutRequestId =
+      callback.CheckoutRequestID || null;
 
-    /* --- extract metadata --- */
+    const resultCode =
+      Number(callback.ResultCode);
 
-    let receiptNumber   = null;
+    const resultDesc =
+      callback.ResultDesc || "";
+
+    console.log(
+      "MerchantRequestID:",
+      merchantRequestId
+    );
+
+    console.log(
+      "CheckoutRequestID:",
+      checkoutRequestId
+    );
+
+    console.log(
+      "ResultCode:",
+      resultCode
+    );
+
+    console.log(
+      "ResultDesc:",
+      resultDesc
+    );
+
+
+    /* -----------------------------------------
+       CALLBACK METADATA
+       ----------------------------------------- */
+
+    let receiptNumber = null;
     let transactionDate = null;
-    let phoneNumber     = null;
-    let amount          = null;
+    let phoneNumber = null;
+    let amount = null;
 
-    const metadata = callback.CallbackMetadata?.Item;
+    const metadata =
+      callback.CallbackMetadata?.Item;
 
     if (Array.isArray(metadata)) {
+
       for (const item of metadata) {
-        if (item.Name === "MpesaReceiptNumber") receiptNumber = item.Value;
-        if (item.Name === "TransactionDate")   transactionDate = item.Value;
-        if (item.Name === "PhoneNumber")       phoneNumber = item.Value;
-        if (item.Name === "Amount")            amount = item.Value;
+
+        if (
+          item.Name ===
+          "MpesaReceiptNumber"
+        ) {
+          receiptNumber =
+            item.Value;
+        }
+
+        if (
+          item.Name ===
+          "TransactionDate"
+        ) {
+          transactionDate =
+            item.Value;
+        }
+
+        if (
+          item.Name ===
+          "PhoneNumber"
+        ) {
+          phoneNumber =
+            item.Value;
+        }
+
+        if (
+          item.Name ===
+          "Amount"
+        ) {
+          amount =
+            item.Value;
+        }
+
       }
     }
 
-    /* --- find order --- */
 
-    const orders = readOrders();
+    /* -----------------------------------------
+       FIND ORDER
+       ----------------------------------------- */
 
-    const orderIndex = orders.findIndex(
-      o => o.checkoutRequestId === checkoutRequestId
-    );
+    const orders =
+      readOrders();
+
+    const orderIndex =
+      orders.findIndex(
+        order =>
+          order.checkoutRequestId ===
+          checkoutRequestId
+      );
+
 
     if (orderIndex === -1) {
-      console.error("⚠️ No matching order for callback:", checkoutRequestId);
-      return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+
+      console.error(
+        "⚠️ No matching order for callback:",
+        checkoutRequestId
+      );
+
+      /*
+       * Still acknowledge Safaricom.
+       */
+
+      return res.json({
+        ResultCode: 0,
+        ResultDesc: "Accepted"
+      });
+
     }
 
-    const order = orders[orderIndex];
 
-    order.resultCode = resultCode;
-    order.resultDesc = resultDesc;
-    order.updatedAt  = new Date().toISOString();
+    const order =
+      orders[orderIndex];
+
+
+    order.resultCode =
+      resultCode;
+
+    order.resultDesc =
+      resultDesc;
+
+    order.updatedAt =
+      new Date().toISOString();
+
+
+    /* -----------------------------------------
+       PAYMENT SUCCESS
+       ----------------------------------------- */
 
     if (resultCode === 0) {
 
-      order.status             = "PAID";
-      order.mpesaReceiptNumber = receiptNumber;
-      order.transactionDate    = transactionDate;
-      order.paidPhone          = phoneNumber;
-      order.paidAmount         = amount;
+      order.status =
+        "PAID";
+
+      order.mpesaReceiptNumber =
+        receiptNumber;
+
+      order.transactionDate =
+        transactionDate;
+
+      order.paidPhone =
+        phoneNumber;
+
+      order.paidAmount =
+        amount;
+
 
       console.log("");
-      console.log("======================================");
-      console.log("✅ M-PESA PAYMENT SUCCESSFUL");
-      console.log("======================================");
-      console.log("Order  :", order.orderId);
-      console.log("Amount :", amount);
-      console.log("Receipt:", receiptNumber);
+      console.log(
+        "======================================"
+      );
 
-      /* Persist BEFORE WhatsApp so payment is never lost. */
+      console.log(
+        "✅ M-PESA PAYMENT SUCCESSFUL"
+      );
+
+      console.log(
+        "======================================"
+      );
+
+      console.log(
+        "Order:",
+        order.orderId
+      );
+
+      console.log(
+        "Amount:",
+        amount
+      );
+
+      console.log(
+        "Receipt:",
+        receiptNumber
+      );
+
+
+      /*
+       * Save PAID order before sending
+       * WhatsApp notification.
+       */
+
       writeOrders(orders);
 
-      /* WhatsApp notification — non-fatal. */
+
+      /* ---------------------------------------
+         WHATSAPP ORDER NOTIFICATION
+         (non-fatal — payment is already saved)
+         --------------------------------------- */
+
       try {
 
-        const wa = await sendWhatsAppOrderNotification(
-          order,
-          amount,
-          receiptNumber
-        );
+        const whatsappResult =
+          await sendWhatsAppOrderNotification(
+            order,
+            amount,
+            receiptNumber
+          );
 
-        if (wa?.success) {
-          console.log("✅ WhatsApp order notification sent. Message ID:", wa.messageId);
+
+        if (
+          whatsappResult?.success
+        ) {
+
+          console.log(
+            "✅ WhatsApp order notification sent. Message ID:",
+            whatsappResult.messageId
+          );
+
         } else {
+
           console.error(
             "⚠️ Payment succeeded but WhatsApp failed:",
-            JSON.stringify(wa, null, 2)
+            JSON.stringify(
+              whatsappResult,
+              null,
+              2
+            )
           );
+
         }
 
+
       } catch (waErr) {
-        console.error("⚠️ WhatsApp threw (payment is still recorded):", waErr);
+
+        console.error(
+          "⚠️ WhatsApp threw (payment is still recorded):",
+          waErr
+        );
+
       }
+
 
     } else {
 
-      order.status = "FAILED";
+      order.status =
+        "FAILED";
+
       writeOrders(orders);
 
-      console.log("");
-      console.log("❌ PAYMENT FAILED");
-      console.log("Code        :", resultCode);
-      console.log("Description :", resultDesc);
+
+      console.log(
+        "❌ PAYMENT FAILED:"
+      );
+
+      console.log(
+        "Code:",
+        resultCode
+      );
+
+      console.log(
+        "Description:",
+        resultDesc
+      );
 
     }
 
+
   } catch (error) {
-    console.error("❌ Callback processing error:", error);
+
+    console.error(
+      "❌ Callback processing error:",
+      error
+    );
+
   }
 
-  return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+
+  /*
+   * ALWAYS acknowledge Safaricom.
+   */
+
+  return res.json({
+    ResultCode: 0,
+    ResultDesc: "Accepted"
+  });
 
 }
 
@@ -608,7 +974,11 @@ app.post("/api/payment/callback", handleMpesaCallback);
    ========================================================= */
 
 app.get("/", (_req, res) => {
-  res.json({ ok: true, service: "ananda-green-herbary", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: "ananda-green-herbary",
+    time: new Date().toISOString()
+  });
 });
 
 app.get("/health", (_req, res) => {
@@ -622,8 +992,18 @@ app.get("/api/orders", (_req, res) => {
 
 /* Lookup single order by orderId */
 app.get("/api/orders/:orderId", (req, res) => {
-  const order = readOrders().find(o => o.orderId === req.params.orderId);
-  if (!order) return res.status(404).json({ ok: false, message: "Not found" });
+  const order =
+    readOrders().find(
+      o => o.orderId === req.params.orderId
+    );
+
+  if (!order) {
+    return res.status(404).json({
+      ok: false,
+      message: "Not found"
+    });
+  }
+
   res.json(order);
 });
 
@@ -636,20 +1016,27 @@ app.get("/api/orders/:orderId", (req, res) => {
 
 app.get("/test-whatsapp", async (req, res) => {
 
-  const phone = req.query.phone || process.env.ADMIN_NOTIFY_PHONE;
+  const phone =
+    req.query.phone ||
+    process.env.ADMIN_NOTIFY_PHONE;
 
   if (!phone) {
     return res.status(400).json({
       ok: false,
-      message: "Provide ?phone=2547XXXXXXXX or set ADMIN_NOTIFY_PHONE"
+      message:
+        "Provide ?phone=2547XXXXXXXX or set ADMIN_NOTIFY_PHONE"
     });
   }
 
-  const result = await sendWhatsAppOrderNotification(
-    { orderId: "TEST-001", customerPhone: phone },
-    10,
-    "TESTRECEIPT"
-  );
+  const result =
+    await sendWhatsAppOrderNotification(
+      {
+        orderId: "TEST-001",
+        customerPhone: phone
+      },
+      10,
+      "TESTRECEIPT"
+    );
 
   res.json(result);
 
@@ -660,28 +1047,63 @@ app.get("/test-whatsapp", async (req, res) => {
    ========================================================= */
 
 app.use((req, res) => {
-  res.status(404).json({ ok: false, message: "Not found", path: req.originalUrl });
+  res.status(404).json({
+    ok: false,
+    message: "Not found",
+    path: req.originalUrl
+  });
 });
 
 app.use((err, _req, res, _next) => {
   console.error("❌ Unhandled error:", err);
-  res.status(500).json({ ok: false, message: "Server error" });
+
+  res.status(500).json({
+    ok: false,
+    message: "Server error"
+  });
 });
 
 /* =========================================================
    START
    ========================================================= */
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+  process.env.PORT || 3000;
 
 app.listen(PORT, () => {
+
   console.log("");
-  console.log("======================================");
-  console.log(`🚀 Server listening on port ${PORT}`);
-  console.log(`   M-Pesa env   : ${MPESA_ENV}`);
-  console.log(`   Callback URL : ${process.env.MPESA_CALLBACK_URL || "(not set)"}`);
-  console.log(`   WhatsApp tmpl: ${process.env.WHATSAPP_TEMPLATE_NAME || "(none — text fallback)"}`);
-  console.log("======================================");
+
+  console.log(
+    "======================================"
+  );
+
+  console.log(
+    `🚀 Server listening on port ${PORT}`
+  );
+
+  console.log(
+    `   M-Pesa env   : ${MPESA_ENV}`
+  );
+
+  console.log(
+    `   Callback URL : ${
+      process.env.MPESA_CALLBACK_URL ||
+      "(not set)"
+    }`
+  );
+
+  console.log(
+    `   WhatsApp tmpl: ${
+      process.env.WHATSAPP_TEMPLATE_NAME ||
+      "(none — text fallback)"
+    }`
+  );
+
+  console.log(
+    "======================================"
+  );
+
 });
 
 /* =========================================================
