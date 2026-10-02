@@ -5611,6 +5611,283 @@ async function pollPayment(checkoutRequestId){
 
       status.innerHTML =
         "<b>VERIFYING PAYMENT…</b>" +
+/* =========================================================
+   M-PESA PAYMENT POLLING
+   Corrected:
+   - Polls for longer
+   - PAID is immediately treated as confirmed
+   - Temporary server/M-Pesa errors remain PENDING
+   - Does not incorrectly tell the customer payment failed
+   - Uses the server's PAID status as the authority
+   ========================================================= */
+
+async function pollPayment(checkoutRequestId){
+
+  const status =
+    document.getElementById("paymentStatus");
+
+  const btn =
+    document.getElementById("payBtn");
+
+  if(!checkoutRequestId){
+
+    status.innerHTML =
+      "<b>PAYMENT STATUS UNAVAILABLE</b>" +
+      "<div>We could not obtain the M-Pesa transaction reference.</div>";
+
+    btn.disabled = false;
+    btn.textContent = "TRY M-PESA AGAIN";
+
+    return;
+  }
+
+  /*
+    Check every 3 seconds.
+
+    100 attempts × 3 seconds =
+    approximately 5 minutes.
+
+    This gives Safaricom callback/status
+    processing more time to complete.
+  */
+
+  for(let i = 0; i < 100; i++){
+
+    /*
+      Wait 3 seconds before each check.
+    */
+
+    await new Promise(resolve =>
+      setTimeout(resolve, 3000)
+    );
+
+    try{
+
+      const r =
+        await fetch(
+          "/api/mpesa/payment/" +
+          encodeURIComponent(checkoutRequestId),
+          {
+            method:"GET",
+            cache:"no-store",
+            headers:{
+              "Accept":"application/json",
+              "Cache-Control":"no-cache"
+            }
+          }
+        );
+
+      let data = {};
+
+      try{
+
+        data = await r.json();
+
+      }catch(parseError){
+
+        console.warn(
+          "Could not parse payment response:",
+          parseError
+        );
+
+        /*
+          A response that cannot be parsed is NOT
+          automatically a failed payment.
+        */
+
+        continue;
+      }
+
+      console.log(
+        "M-Pesa payment status:",
+        data
+      );
+
+      /*
+        If the HTTP request temporarily fails,
+        continue polling.
+
+        Do NOT tell the customer that payment failed.
+      */
+
+      if(!r.ok){
+
+        console.warn(
+          "Payment status request returned HTTP error:",
+          r.status,
+          data
+        );
+
+        status.innerHTML =
+          "<b>VERIFYING PAYMENT…</b>" +
+          "<div>We are checking your M-Pesa payment. Please wait.</div>";
+
+        continue;
+      }
+
+      /*
+        Normalize status.
+      */
+
+      const currentStatus =
+        String(
+          data.status ||
+          data.payment?.status ||
+          ""
+        ).trim().toUpperCase();
+
+      /*
+        =====================================================
+        PAYMENT CONFIRMED
+        =====================================================
+      */
+
+      if(currentStatus === "PAID"){
+
+        const receipt =
+          data.payment?.mpesaReceipt ||
+          data.mpesaReceipt ||
+          data.receipt ||
+          "Confirmed";
+
+        const amount =
+          data.payment?.amount ||
+          data.amount ||
+          "";
+
+        status.innerHTML =
+          "<div style='text-align:center'>" +
+
+          "<div style='font-size:48px;margin-bottom:8px'>" +
+          "✓" +
+          "</div>" +
+
+          "<b style='font-size:20px'>" +
+          "PAYMENT CONFIRMED" +
+          "</b>" +
+
+          "<div style='margin-top:10px'>" +
+          "M-PESA Receipt: <b>" +
+          escapeHtml(receipt) +
+          "</b>" +
+          "</div>" +
+
+          (
+            amount
+              ? "<div style='margin-top:6px'>" +
+                "Amount Paid: <b>KES " +
+                escapeHtml(amount) +
+                "</b>" +
+                "</div>"
+              : ""
+          ) +
+
+          "<div style='margin-top:10px'>" +
+          "Your ANANDA order has been received successfully." +
+          "</div>" +
+
+          "<div style='margin-top:6px;color:#4f7f3a'>" +
+          "Your order confirmation has been sent." +
+          "</div>" +
+
+          "</div>";
+
+        /*
+          Payment is confirmed.
+
+          Clear the cart only AFTER the server
+          reports PAID.
+        */
+
+        localStorage.removeItem(
+          "anandaCart"
+        );
+
+        cart = [];
+
+        renderCart();
+
+        btn.disabled = true;
+
+        btn.textContent =
+          "ORDER PAID ✓";
+
+        /*
+          Return to home after displaying
+          confirmation.
+        */
+
+        setTimeout(
+          () => show("home"),
+          3000
+        );
+
+        return;
+      }
+
+      /*
+        =====================================================
+        DEFINITELY FAILED
+        =====================================================
+
+        Only treat the payment as failed when the
+        SERVER explicitly reports FAILED.
+      */
+
+      if(currentStatus === "FAILED"){
+
+        const message =
+          data.payment?.resultDesc ||
+          data.resultDesc ||
+          data.message ||
+          "M-Pesa payment was not completed.";
+
+        status.innerHTML =
+          "<b>PAYMENT NOT COMPLETED</b>" +
+          "<div>" +
+          escapeHtml(message) +
+          "</div>";
+
+        btn.disabled = false;
+
+        btn.textContent =
+          "TRY M-PESA AGAIN";
+
+        return;
+      }
+
+      /*
+        =====================================================
+        STILL PENDING
+        =====================================================
+      */
+
+      status.innerHTML =
+        "<b>WAITING FOR PAYMENT CONFIRMATION…</b>" +
+
+        "<div>" +
+        "Please complete the M-Pesa prompt on your phone." +
+        "</div>" +
+
+        "<div style='margin-top:8px'>" +
+        "Your payment is being verified securely." +
+        "</div>";
+
+    }catch(error){
+
+      /*
+        Network/browser errors are temporary.
+
+        NEVER convert these into PAYMENT FAILED.
+      */
+
+      console.warn(
+        "Temporary payment polling error:",
+        error
+      );
+
+      status.innerHTML =
+        "<b>VERIFYING PAYMENT…</b>" +
 
         "<div>" +
         "We are still checking your M-Pesa payment." +
@@ -5664,6 +5941,7 @@ async function pollPayment(checkoutRequestId){
 
   btn.textContent =
     "CHECK PAYMENT AGAIN";
+}
 }
 /* CONSULTATION */
 
