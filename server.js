@@ -3,75 +3,154 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const nodemailer = require("nodemailer");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const ORDERS_FILE = path.join(__dirname, "orders.json");
-const MPESA_ENV = String(process.env.MPESA_ENV || "sandbox").toLowerCase();
-const MPESA_BASE = MPESA_ENV === "production"
-  ? "https://api.safaricom.co.ke"
-  : "https://sandbox.safaricom.co.ke";
+
+// =========================================================
+// M-PESA SANDBOX ONLY — DO NOT CHANGE TO PRODUCTION
+// =========================================================
+const MPESA_ENV = "sandbox";
+const MPESA_BASE = "https://sandbox.safaricom.co.ke";
+
+// =========================================================
+// EMAIL NOTIFICATION
+// =========================================================
+const ADMIN_NOTIFY_EMAIL = "anandagreenherbary@gmail.com";
+
+const EMAIL_ENABLED =
+  String(
+    process.env.EMAIL_ENABLED || "true"
+  ).toLowerCase() === "true";
+
+const EMAIL_FROM =
+  process.env.EMAIL_FROM ||
+  process.env.SMTP_USER ||
+  ADMIN_NOTIFY_EMAIL;
+
 const paymentLocks = new Set();
 
 app.disable("x-powered-by");
 app.set("trust proxy", true);
 
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    "*"
+  );
+
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,HEAD,POST,OPTIONS"
+  );
+
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
   next();
 });
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(
+  express.json({
+    limit: "1mb"
+  })
+);
+
+app.use(
+  express.urlencoded({
+    extended: true
+  })
+);
 
 app.use((req, _res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  console.log(
+    `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+  );
+
   next();
 });
 
 function readOrders() {
   try {
-    if (!fs.existsSync(ORDERS_FILE)) return [];
+    if (!fs.existsSync(ORDERS_FILE)) {
+      return [];
+    }
 
-    const raw = fs.readFileSync(ORDERS_FILE, "utf8");
-    if (!raw.trim()) return [];
+    const raw =
+      fs.readFileSync(
+        ORDERS_FILE,
+        "utf8"
+      );
 
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
+    if (!raw.trim()) {
+      return [];
+    }
+
+    const data =
+      JSON.parse(raw);
+
+    return Array.isArray(data)
+      ? data
+      : [];
   } catch (err) {
-    console.error("❌ readOrders failed:", err.message);
+    console.error(
+      "❌ readOrders failed:",
+      err.message
+    );
+
     return [];
   }
 }
 
 function writeOrders(orders) {
   try {
-    const tmp = `${ORDERS_FILE}.tmp`;
+    const tmp =
+      `${ORDERS_FILE}.tmp`;
 
     fs.writeFileSync(
       tmp,
-      JSON.stringify(orders, null, 2),
+      JSON.stringify(
+        orders,
+        null,
+        2
+      ),
       "utf8"
     );
 
-    fs.renameSync(tmp, ORDERS_FILE);
+    fs.renameSync(
+      tmp,
+      ORDERS_FILE
+    );
 
     return true;
   } catch (err) {
-    console.error("❌ writeOrders failed:", err.message);
+    console.error(
+      "❌ writeOrders failed:",
+      err.message
+    );
+
     return false;
   }
 }
 
 function saveOrder(order) {
-  const orders = readOrders();
+  const orders =
+    readOrders();
 
-  const idx = orders.findIndex(
-    (o) => o.orderId === order.orderId
-  );
+  const idx =
+    orders.findIndex(
+      (o) =>
+        o.orderId ===
+        order.orderId
+    );
 
   if (idx >= 0) {
     orders[idx] = {
@@ -82,29 +161,58 @@ function saveOrder(order) {
     orders.push(order);
   }
 
-  return writeOrders(orders);
+  return writeOrders(
+    orders
+  );
 }
 
 function envPresent(name) {
   return Boolean(
-    String(process.env[name] || "").trim()
+    String(
+      process.env[name] || ""
+    ).trim()
   );
 }
 
 function nairobiTimestamp() {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Africa/Nairobi",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(new Date());
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-GB",
+      {
+        timeZone:
+          "Africa/Nairobi",
 
-  const get = (type) =>
-    parts.find((p) => p.type === type)?.value || "00";
+        year:
+          "numeric",
+
+        month:
+          "2-digit",
+
+        day:
+          "2-digit",
+
+        hour:
+          "2-digit",
+
+        minute:
+          "2-digit",
+
+        second:
+          "2-digit",
+
+        hourCycle:
+          "h23"
+      }
+    ).formatToParts(
+      new Date()
+    );
+
+  const get =
+    (type) =>
+      parts.find(
+        (p) =>
+          p.type === type
+      )?.value || "00";
 
   return (
     `${get("year")}` +
@@ -124,20 +232,30 @@ function normalizeKenyaPhone(phone) {
     return null;
   }
 
-  let p = String(phone).replace(/\D/g, "");
+  let p =
+    String(phone)
+      .replace(/\D/g, "");
 
-  if (!p) return null;
+  if (!p) {
+    return null;
+  }
 
-  if (p.startsWith("0")) {
-    p = `254${p.slice(1)}`;
+  if (
+    p.startsWith("0")
+  ) {
+    p =
+      `254${p.slice(1)}`;
   } else if (
     p.startsWith("7") ||
     p.startsWith("1")
   ) {
-    p = `254${p}`;
+    p =
+      `254${p}`;
   }
 
-  if (!/^254[17]\d{8}$/.test(p)) {
+  if (
+    !/^254[17]\d{8}$/.test(p)
+  ) {
     return null;
   }
 
@@ -150,7 +268,9 @@ function mpesaPassword(
   timestamp
 ) {
   return Buffer
-    .from(`${shortcode}${passkey}${timestamp}`)
+    .from(
+      `${shortcode}${passkey}${timestamp}`
+    )
     .toString("base64");
 }
 
@@ -169,16 +289,21 @@ async function getMpesaAccessToken() {
 
   const auth =
     Buffer
-      .from(`${key}:${secret}`)
+      .from(
+        `${key}:${secret}`
+      )
       .toString("base64");
 
   const response =
     await fetch(
       `${MPESA_BASE}/oauth/v1/generate?grant_type=client_credentials`,
       {
-        method: "GET",
+        method:
+          "GET",
+
         headers: {
-          Authorization: `Basic ${auth}`
+          Authorization:
+            `Basic ${auth}`
         }
       }
     );
@@ -189,9 +314,12 @@ async function getMpesaAccessToken() {
   let data;
 
   try {
-    data = JSON.parse(raw);
+    data =
+      JSON.parse(raw);
   } catch {
-    data = { raw };
+    data = {
+      raw
+    };
   }
 
   if (
@@ -214,22 +342,35 @@ async function getMpesaAccessToken() {
   return data.access_token;
 }
 
-function extractCallbackMetadata(callback) {
+function extractCallbackMetadata(
+  callback
+) {
   const items =
     callback?.CallbackMetadata?.Item;
 
   const result = {
-    receiptNumber: null,
-    transactionDate: null,
-    phoneNumber: null,
-    amount: null
+    receiptNumber:
+      null,
+
+    transactionDate:
+      null,
+
+    phoneNumber:
+      null,
+
+    amount:
+      null
   };
 
-  if (!Array.isArray(items)) {
+  if (
+    !Array.isArray(items)
+  ) {
     return result;
   }
 
-  for (const item of items) {
+  for (
+    const item of items
+  ) {
     if (
       item?.Name ===
       "MpesaReceiptNumber"
@@ -290,7 +431,9 @@ async function sendWhatsAppMessage({
     "v24.0";
 
   const to =
-    normalizeKenyaPhone(phone);
+    normalizeKenyaPhone(
+      phone
+    );
 
   console.log(
     "📲 WhatsApp send request:",
@@ -306,14 +449,19 @@ async function sendWhatsAppMessage({
 
   if (!token) {
     return {
-      success: false,
-      error: "Missing WHATSAPP_TOKEN"
+      success:
+        false,
+
+      error:
+        "Missing WHATSAPP_TOKEN"
     };
   }
 
   if (!phoneNumberId) {
     return {
-      success: false,
+      success:
+        false,
+
       error:
         "Missing WHATSAPP_PHONE_NUMBER_ID"
     };
@@ -321,7 +469,9 @@ async function sendWhatsAppMessage({
 
   if (!to) {
     return {
-      success: false,
+      success:
+        false,
+
       error:
         "Invalid WhatsApp destination phone"
     };
@@ -329,9 +479,12 @@ async function sendWhatsAppMessage({
 
   if (!templateName) {
     return {
-      success: false,
+      success:
+        false,
+
       error:
         "Missing WHATSAPP_TEMPLATE_NAME. An approved WhatsApp template is required for order confirmations.",
+
       code:
         "MISSING_TEMPLATE"
     };
@@ -431,7 +584,9 @@ async function sendWhatsAppMessage({
       data =
         JSON.parse(raw);
     } catch {
-      data = { raw };
+      data = {
+        raw
+      };
     }
 
     console.log(
@@ -453,7 +608,9 @@ async function sendWhatsAppMessage({
         data?.error || {};
 
       return {
-        success: false,
+        success:
+          false,
+
         status:
           response.status,
 
@@ -475,7 +632,8 @@ async function sendWhatsAppMessage({
     }
 
     return {
-      success: true,
+      success:
+        true,
 
       messageId:
         data?.messages?.[0]?.id ||
@@ -486,7 +644,216 @@ async function sendWhatsAppMessage({
     };
   } catch (err) {
     return {
-      success: false,
+      success:
+        false,
+
+      error:
+        err?.message ||
+        String(err)
+    };
+  }
+}
+
+async function sendPaidOrderEmail(
+  order
+) {
+  if (!EMAIL_ENABLED) {
+    return {
+      success:
+        false,
+
+      skipped:
+        true,
+
+      error:
+        "EMAIL_ENABLED is not true"
+    };
+  }
+
+  const host =
+    process.env.SMTP_HOST ||
+    "smtp.gmail.com";
+
+  const port =
+    Number(
+      process.env.SMTP_PORT ||
+      465
+    );
+
+  const secure =
+    String(
+      process.env.SMTP_SECURE ||
+      (
+        port === 465
+          ? "true"
+          : "false"
+      )
+    ).toLowerCase() ===
+    "true";
+
+  const user =
+    process.env.SMTP_USER ||
+    ADMIN_NOTIFY_EMAIL;
+
+  const pass =
+    process.env.SMTP_PASS;
+
+  if (!pass) {
+    return {
+      success:
+        false,
+
+      error:
+        "Missing SMTP_PASS"
+    };
+  }
+
+  const transporter =
+    nodemailer.createTransport({
+      host,
+      port,
+      secure,
+
+      auth: {
+        user,
+        pass
+      }
+    });
+
+  const items =
+    Array.isArray(
+      order.items
+    ) &&
+    order.items.length
+      ? order.items
+          .map(
+            (
+              item,
+              i
+            ) => {
+              if (
+                typeof item ===
+                "string"
+              ) {
+                return `${i + 1}. ${item}`;
+              }
+
+              return (
+                `${i + 1}. ` +
+                `${item.name || item.productName || "Item"} ` +
+                `x ${item.quantity || 1}` +
+                (
+                  item.price !=
+                  null
+                    ? ` @ ${item.price}`
+                    : ""
+                )
+              );
+            }
+          )
+          .join("\n")
+      : "No item details supplied";
+
+  const text = [
+    "ANANDA HERBAL — PAID ORDER NOTIFICATION",
+    "",
+
+    `Order ID: ${order.orderId || "-"}`,
+
+    `Status: ${order.status || "PAID"}`,
+
+    `Amount Paid: ${
+      order.paidAmount ??
+      order.amount ??
+      "-"
+    }`,
+
+    `M-Pesa Receipt: ${
+      order.mpesaReceiptNumber ||
+      "-"
+    }`,
+
+    `Paid Phone: ${
+      order.paidPhone ||
+      order.customerPhone ||
+      order.phone ||
+      "-"
+    }`,
+
+    `Customer: ${
+      order.customerName ||
+      "-"
+    }`,
+
+    `Customer Email: ${
+      order.email ||
+      "-"
+    }`,
+
+    `Address: ${
+      order.address ||
+      "-"
+    }`,
+
+    `City: ${
+      order.city ||
+      "-"
+    }`,
+
+    `Transaction Date: ${
+      order.transactionDate ||
+      "-"
+    }`,
+
+    `Confirmed At: ${
+      order.paymentConfirmedAt ||
+      "-"
+    }`,
+
+    "",
+
+    "Items:",
+
+    items,
+
+    "",
+
+    `Notes: ${
+      order.notes ||
+      "-"
+    }`
+  ].join("\n");
+
+  try {
+    const info =
+      await transporter.sendMail({
+        from:
+          EMAIL_FROM,
+
+        to:
+          ADMIN_NOTIFY_EMAIL,
+
+        subject:
+          `PAID ORDER - ${
+            order.orderId ||
+            "Ananda Order"
+          }`,
+
+        text
+      });
+
+    return {
+      success:
+        true,
+
+      messageId:
+        info.messageId ||
+        null
+    };
+  } catch (err) {
+    return {
+      success:
+        false,
 
       error:
         err?.message ||
@@ -504,9 +871,14 @@ async function markOrderPaidAndNotify(
 ) {
   if (!order) {
     return {
-      success: false,
-      paymentRecorded: false,
-      error: "Order not found"
+      success:
+        false,
+
+      paymentRecorded:
+        false,
+
+      error:
+        "Order not found"
     };
   }
 
@@ -527,7 +899,8 @@ async function markOrderPaidAndNotify(
       ) || order;
 
     return {
-      success: true,
+      success:
+        true,
 
       paymentRecorded:
         String(
@@ -597,7 +970,7 @@ async function markOrderPaidAndNotify(
 
     if (
       extra.transactionDate !=
-        null
+      null
     ) {
       order.transactionDate =
         extra.transactionDate;
@@ -611,6 +984,47 @@ async function markOrderPaidAndNotify(
     }
 
     saveOrder(order);
+
+    let emailResult =
+      null;
+
+    if (
+      !order.emailSent
+    ) {
+      emailResult =
+        await sendPaidOrderEmail(
+          order
+        );
+
+      if (
+        emailResult.success
+      ) {
+        order.emailSent =
+          true;
+
+        order.emailMessageId =
+          emailResult.messageId ||
+          null;
+
+        order.emailSentAt =
+          new Date().toISOString();
+
+        order.emailError =
+          null;
+      } else {
+        order.emailSent =
+          false;
+
+        order.emailError =
+          emailResult.error ||
+          "Email notification failed";
+      }
+
+      order.emailLastAttemptAt =
+        new Date().toISOString();
+
+      saveOrder(order);
+    }
 
     let customerResult =
       null;
@@ -763,8 +1177,7 @@ async function markOrderPaidAndNotify(
       adminPhone !==
         customerPhone &&
       !order.adminWhatsappSent
-    ) {
-      adminResult =
+    ) {      adminResult =
         await sendWhatsAppMessage(
           {
             phone:
@@ -853,12 +1266,20 @@ async function markOrderPaidAndNotify(
     }
 
     return {
-      success: true,
-      paymentRecorded: true,
+      success:
+        true,
+
+      paymentRecorded:
+        true,
+
       customer:
         customerResult,
+
       admin:
-        adminResult
+        adminResult,
+
+      email:
+        emailResult
     };
   } finally {
     paymentLocks.delete(
@@ -889,14 +1310,17 @@ function markOrderFailed(
   order.updatedAt =
     new Date().toISOString();
 
-  return saveOrder(order);
+  return saveOrder(
+    order
+  );
 }
 
 function paymentResponse(
   order
 ) {
   return {
-    success: true,
+    success:
+      true,
 
     status:
       String(
@@ -960,6 +1384,23 @@ function paymentResponse(
         null
     },
 
+    email: {
+      sent:
+        order?.emailSent ===
+        true,
+
+      messageId:
+        order?.emailMessageId ||
+        null,
+
+      recipient:
+        ADMIN_NOTIFY_EMAIL,
+
+      error:
+        order?.emailError ||
+        null
+    },
+
     updatedAt:
       order?.updatedAt ||
       null,
@@ -995,7 +1436,9 @@ app.post(
 
       if (
         !phone ||
-        !Number.isFinite(amount) ||
+        !Number.isFinite(
+          amount
+        ) ||
         amount < 1
       ) {
         return res
@@ -1248,6 +1691,9 @@ app.post(
           false,
 
         adminWhatsappSent:
+          false,
+
+        emailSent:
           false,
 
         paymentConfirmedAt:
@@ -1656,9 +2102,7 @@ app.get(
       });
     }
   }
-);
-
-/* =========================================================
+);/* =========================================================
    M-PESA CALLBACK
    ========================================================= */
 
@@ -2241,6 +2685,68 @@ app.get(
 );
 
 /* =========================================================
+   EMAIL TEST
+   ========================================================= */
+
+app.get(
+  "/test-email",
+  async (_req, res) => {
+    const result =
+      await sendPaidOrderEmail({
+        orderId:
+          "TEST-EMAIL-001",
+
+        status:
+          "PAID",
+
+        paidAmount:
+          10,
+
+        mpesaReceiptNumber:
+          "TESTRECEIPT",
+
+        customerName:
+          "Test Customer",
+
+        customerPhone:
+          "254700000000",
+
+        email:
+          "test@example.com",
+
+        address:
+          "Test address",
+
+        city:
+          "Nairobi",
+
+        items: [
+          {
+            name:
+              "Test Product",
+
+            quantity:
+              1,
+
+            price:
+              10
+          }
+        ],
+
+        notes:
+          "Email configuration test",
+
+        paymentConfirmedAt:
+          new Date().toISOString()
+      });
+
+    return res.json(
+      result
+    );
+  }
+);
+
+/* =========================================================
    404
    ========================================================= */
 
@@ -2342,7 +2848,7 @@ app.listen(
 /*
 Environment variables:
 
-MPESA_ENV=production
+MPESA_ENV is fixed to sandbox
 MPESA_CONSUMER_KEY=...
 MPESA_CONSUMER_SECRET=...
 MPESA_SHORTCODE=...
@@ -2356,4 +2862,13 @@ WHATSAPP_TEMPLATE_LANG=en
 WHATSAPP_API_VERSION=v24.0
 
 ADMIN_NOTIFY_PHONE=2547XXXXXXXX
+
+EMAIL_ENABLED=true
+ADMIN_NOTIFY_EMAIL=anandagreenherbary@gmail.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=anandagreenherbary@gmail.com
+SMTP_PASS=YOUR_GMAIL_APP_PASSWORD
+EMAIL_FROM=anandagreenherbary@gmail.com
 */
