@@ -1,14 +1,16 @@
 {
   "name": "ananda-website",
   "version": "1.0.0",
-  "description": "Ananda Herbal Website",
+  "description": "Ananda Green Herbary E-commerce Website",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "axios": "^1.8.4",
-    "express": "^5.1.0",
-    "nodemailer": "^7.0.6"
+    "express": "^4.21.2",
+    "nodemailer": "^6.9.0"
   }
 }
